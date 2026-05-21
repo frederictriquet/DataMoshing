@@ -1006,8 +1006,8 @@ button.primary:hover {
   </div>
   <div id="structure-panel">
     <div class="panel-tabs">
-      <button class="tab active" data-tab="structure">Structure</button>
-      <button class="tab" data-tab="tools">Outils</button>
+      <button class="tab" data-tab="structure">Structure</button>
+      <button class="tab active" data-tab="tools">Outils</button>
       <button class="tab" data-tab="history">Historique</button>
       <!-- Bouton Undo intégré dans la barre d'onglets — reste visible au scroll -->
       <div class="panel-tabs-actions">
@@ -1015,7 +1015,7 @@ button.primary:hover {
         <span id="undo-count" class="panel-action-count"></span>
       </div>
     </div>
-    <div id="tab-structure" class="tab-content active">
+    <div id="tab-structure" class="tab-content">
       <div id="sof2-warning" class="sof2-warning hidden">
         JPEG progressif (SOF2) détecté — le mapping octets/pixels ne sera pas précis (v1 baseline-only).
       </div>
@@ -1023,7 +1023,7 @@ button.primary:hover {
         <div style="color: var(--text2); font-size: 11px;">Aucun fichier chargé.</div>
       </div>
     </div>
-    <div id="tab-tools" class="tab-content">
+    <div id="tab-tools" class="tab-content active">
       <div id="critical-warning" class="critical-warning hidden"></div>
       <div id="selection-info">Aucune sélection.</div>
       <div id="tools-panel">
