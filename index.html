@@ -885,6 +885,74 @@ button.primary:hover {
   border-radius: 2px;
   z-index: 6;
 }
+/* Modal de compatibilité format */
+#compat-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+#compat-modal.hidden { display: none; }
+#compat-modal-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 28px 32px;
+  max-width: 560px;
+  width: 90%;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+}
+#compat-modal-box h2 {
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 20px 0;
+  letter-spacing: 0.3px;
+}
+.compat-section { margin-bottom: 14px; }
+.compat-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text2);
+  margin-bottom: 5px;
+}
+.compat-problem { color: var(--text); font-size: 13px; line-height: 1.5; }
+.compat-consequences { color: #e8946d; font-size: 13px; line-height: 1.5; }
+.compat-convert {
+  background: var(--surface2);
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.7;
+}
+.compat-convert code {
+  display: block;
+  color: #98d87a;
+  font-family: 'JetBrains Mono', monospace;
+  margin: 4px 0 1px;
+}
+.compat-convert small { color: var(--text2); font-size: 11px; }
+.compat-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+#compat-modal-continue {
+  padding: 7px 18px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+#compat-modal-continue:hover { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -1096,6 +1164,16 @@ button.primary:hover {
       <div id="history-container">
         <div class="history-empty">Aucune opération enregistrée.</div>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="compat-modal" class="hidden">
+  <div id="compat-modal-box">
+    <h2 id="compat-modal-title"></h2>
+    <div id="compat-modal-body"></div>
+    <div class="compat-modal-actions">
+      <button id="compat-modal-continue">Continuer quand même</button>
     </div>
   </div>
 </div>
@@ -2297,8 +2375,6 @@ function startHuffmanDecode() {
     mcuOffsets = null;
     const bar = document.getElementById('huffman-bar');
     if (bar) bar.style.display = 'none';
-    const warn = document.getElementById('critical-warning');
-    if (warn) { warn.textContent = 'JPEG progressif (SOF2) — le mapping exact (Huffman) n\'est pas disponible pour ce format.'; warn.classList.remove('hidden'); }
     return;
   }
   console.log('[Mode C] startHuffmanDecode appelé, mcuCount=', state.parsed.mcuCount);
@@ -2641,6 +2717,7 @@ let canvasHoverTimer = null;
 function onCanvasMousemove(e) {
   if (overlayLocked) return; // highlight figé — on ignore le survol
   if (!state.parsed) return;
+  if (state.parsed.isProgressive) return; // mapping image désactivé pour JPEG progressif
   const ic = $('image-canvas');
   if (!ic || ic.width === 0) return;
   const rect = ic.getBoundingClientRect();
@@ -2697,6 +2774,7 @@ function setupPhase3Bindings() {
     // - Clic hors scan data (MCU = -1) quand verrouillé → déverrouille.
     ic.addEventListener('click', (e) => {
       if (!state.parsed) return;
+      if (state.parsed.isProgressive) return; // mapping image désactivé pour JPEG progressif
 
       // Calcule le MCU sous le curseur depuis les coordonnées pixel
       const rect = ic.getBoundingClientRect();
@@ -4189,7 +4267,16 @@ function onFileLoaded() {
   renderImage(state.buffer);
   renderStructurePanel(state.parsed);
   if (state.parsed && state.parsed.isProgressive) {
-    console.warn('JPEG progressif détecté (SOF2). Seul le baseline (SOF0) est pleinement supporté.');
+    showCompatModal(
+      'Format non compatible — JPEG progressif (SOF2)',
+      'Ce fichier est encodé en JPEG progressif (SOF2). DataMoshing Explorer ne supporte que le JPEG baseline (SOF0/SOF1).',
+      'La sélection dans les données hexadécimales reste fonctionnelle, mais le mapping exact octets↔pixels est indisponible. Il est impossible de cibler une zone précise depuis l\'image — les clics sur l\'image sont désactivés. Les glitchs produits ne seront pas localisés visuellement avec précision.',
+      '<code>convert input.jpg -interlace None output.jpg</code>' +
+      '<small>ImageMagick (recommandé) — disponible sur macOS via Homebrew : brew install imagemagick</small>' +
+      '<code>ffmpeg -i input.jpg output.jpg</code>' +
+      '<small>FFmpeg — disponible sur macOS via Homebrew : brew install ffmpeg</small>' +
+      '<br><br>En ligne : <strong>squoosh.app</strong> → choisir MozJPEG → télécharger'
+    );
   }
   // Phase 5
   state.undoStack.length = 0;
@@ -4333,6 +4420,28 @@ refreshUndoRedoButtons();
 // Phase 3 : resync l'overlay si l'image est redimensionnée (resize fenêtre)
 window.addEventListener('resize', () => {
   if (imageCanvas && imageCanvas.classList.contains('visible')) syncOverlay();
+});
+
+function showCompatModal(title, problem, consequences, convert) {
+  document.getElementById('compat-modal-title').textContent = title;
+  document.getElementById('compat-modal-body').innerHTML =
+    '<div class="compat-section">' +
+      '<div class="compat-section-label">Problème détecté</div>' +
+      '<div class="compat-problem">' + problem + '</div>' +
+    '</div>' +
+    '<div class="compat-section">' +
+      '<div class="compat-section-label">Conséquences si vous continuez</div>' +
+      '<div class="compat-consequences">' + consequences + '</div>' +
+    '</div>' +
+    '<div class="compat-section">' +
+      '<div class="compat-section-label">Comment convertir en format compatible</div>' +
+      '<div class="compat-convert">' + convert + '</div>' +
+    '</div>';
+  document.getElementById('compat-modal').classList.remove('hidden');
+}
+
+document.getElementById('compat-modal-continue').addEventListener('click', () => {
+  document.getElementById('compat-modal').classList.add('hidden');
 });
 </script>
 </body>
