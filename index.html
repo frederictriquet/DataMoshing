@@ -1519,22 +1519,25 @@ function parseDqt(buffer, dataOffset, dataLength) {
 // Format : (class<<4 | id) [1o] + 16 octets « nombre de codes par longueur » + valeurs.
 // Les valeurs symboliques sont extraites pour le Mode C (décodage Huffman exact, §4.3).
 function parseDht(buffer, dataOffset, dataLength) {
-  if (dataLength < 17) return null;
-  const tc = buffer[dataOffset];
-  const tableClass = (tc >> 4) & 0x0F;  // 0 = DC, 1 = AC
-  const tableId = tc & 0x0F;
-  const codeCounts = new Array(16);
-  for (let i = 0; i < 16; i++) {
-    codeCounts[i] = buffer[dataOffset + 1 + i];
+  // Un segment DHT peut contenir plusieurs tables concatenées — on les lit toutes.
+  const tables = [];
+  let pos = dataOffset;
+  const end = dataOffset + dataLength;
+  while (pos + 17 <= end) {
+    const tc = buffer[pos];
+    const tableClass = (tc >> 4) & 0x0F;  // 0 = DC, 1 = AC
+    const tableId = tc & 0x0F;
+    const codeCounts = [];
+    for (let i = 0; i < 16; i++) codeCounts.push(buffer[pos + 1 + i]);
+    let total = 0;
+    for (const n of codeCounts) total += n;
+    if (pos + 17 + total > end) break;
+    const values = [];
+    for (let i = 0; i < total; i++) values.push(buffer[pos + 17 + i]);
+    tables.push({ tableClass, tableId, codeCounts, totalCodes: total, values });
+    pos += 17 + total;
   }
-  let total = 0;
-  for (const n of codeCounts) total += n;
-  // Extraction des valeurs symboliques (après les 17 octets d'en-tête DHT)
-  // Nécessaire pour construire la table de décodage canonique en Mode C
-  const values = [];
-  let pos = dataOffset + 17;
-  for (let i = 0; i < total; i++) values.push(buffer[pos++]);
-  return { tableClass, tableId, codeCounts, totalCodes: total, values };
+  return tables.length > 0 ? tables : null;
 }
 
 // Parse SOF0/SOF1/SOF2 : dimensions + composants (id, h-sampling, v-sampling, quant table id).
@@ -1675,7 +1678,13 @@ function parseJpeg(buffer) {
     } else if (marker === 0xDB) {
       info = parseDqt(buffer, dataOffset, dataLength);
     } else if (marker === 0xC4) {
-      info = parseDht(buffer, dataOffset, dataLength);
+      // parseDht retourne un tableau — un segment peut contenir plusieurs tables
+      const dhtAll = parseDht(buffer, dataOffset, dataLength) || [];
+      for (const t of dhtAll) {
+        result.segments.push({ type: 'DHT', offset: markerStart, length: segLength, info: t });
+      }
+      offset = markerStart + segLength;
+      continue;
     } else if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) {
       info = parseSof(buffer, dataOffset, dataLength);
       if (info) {
@@ -2283,6 +2292,15 @@ self.onmessage = function(e) {
 // Crée un Blob URL depuis HUFFMAN_WORKER_SRC pour éviter un fichier externe.
 function startHuffmanDecode() {
   if (!state.parsed || !state.buffer) return;
+  // Le décodeur baseline ne supporte pas les JPEG progressifs (SOF2) [SPEC-§6.5]
+  if (state.parsed.isProgressive) {
+    mcuOffsets = null;
+    const bar = document.getElementById('huffman-bar');
+    if (bar) bar.style.display = 'none';
+    const warn = document.getElementById('critical-warning');
+    if (warn) { warn.textContent = 'JPEG progressif (SOF2) — le mapping exact (Huffman) n\'est pas disponible pour ce format.'; warn.classList.remove('hidden'); }
+    return;
+  }
   console.log('[Mode C] startHuffmanDecode appelé, mcuCount=', state.parsed.mcuCount);
   cancelHuffmanDecode();
 
