@@ -1,0 +1,4321 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>JPG Datamoshing Explorer</title>
+<style>
+/* ============================================================
+   Variables — thème sombre (cf. SPECS §8)
+   ============================================================ */
+:root {
+  --bg: #1a1a1a;
+  --surface: #222;
+  --surface2: #2a2a2a;
+  --border: #333;
+  --border2: #444;
+  --text: #ddd;
+  --text2: #888;
+  --accent: #e8b86d;
+  --color-header: #e8b86d;
+  --color-scan: #6d9be8;
+  --color-rst: #6de89b;
+  --color-sel: #e86d6d;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+button {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 150ms, border-color 150ms;
+}
+button:hover {
+  background: var(--border);
+  border-color: var(--accent);
+}
+button.primary {
+  background: var(--accent);
+  color: #1a1a1a;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+button.primary:hover {
+  background: #f0c47e;
+}
+
+/* ============================================================
+   Écran d'accueil (overlay plein écran)
+   ============================================================ */
+#welcome-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 40px;
+}
+#welcome-screen.hidden { display: none; }
+
+.welcome-title {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+}
+.welcome-subtitle {
+  color: var(--text2);
+  margin-bottom: 40px;
+}
+
+#drop-zone {
+  width: 480px;
+  height: 240px;
+  border: 2px dashed var(--border2);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 150ms, background 150ms;
+  margin-bottom: 24px;
+}
+#drop-zone:hover, #drop-zone.dragover {
+  border-color: var(--accent);
+  background: var(--surface);
+}
+#drop-zone p {
+  margin: 4px 0;
+  color: var(--text2);
+}
+#drop-zone p.main {
+  color: var(--text);
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.tutorial {
+  max-width: 520px;
+  color: var(--text2);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+.tutorial strong { color: var(--text); }
+
+.error-msg {
+  color: var(--color-sel);
+  margin-top: 16px;
+  font-size: 12px;
+  min-height: 18px;
+}
+
+/* ============================================================
+   Layout principal (cf. SPECS §3.2)
+   - 2 colonnes 50/50 en haut, 1 ligne complète en bas
+   - Ratio rangées 65/35
+   ============================================================ */
+#app {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 65fr 35fr;
+  grid-template-areas:
+    "hex image"
+    "structure structure";
+  width: 100vw;
+  height: 100vh;
+}
+#app.hidden { display: none; }
+
+#hex-container {
+  grid-area: hex;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;          /* le scroll est délégué à .hex-scroll (virtualisation) */
+  font-family: var(--font-mono);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+}
+/* Conteneur scrollable interne (phase 3 — virtualisation) */
+.hex-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  width: 100%;
+}
+.hex-spacer {
+  position: relative;
+  width: 100%;
+  /* hauteur fixée dynamiquement = nbLignes × HEX.lineHeight */
+}
+
+#image-container {
+  grid-area: image;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+  overflow: auto;
+  padding: 16px;
+}
+#image-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+}
+#image-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: pixelated;
+  background: #000;
+  display: none;
+}
+#image-canvas.visible { display: block; }
+#image-canvas.degraded { opacity: 0.35; filter: grayscale(0.8); }
+
+#image-error {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(232, 109, 109, 0.15);
+  border: 1px solid var(--color-sel);
+  color: var(--color-sel);
+  padding: 8px 14px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  pointer-events: none;
+}
+#image-error.hidden { display: none; }
+
+#image-placeholder {
+  color: var(--text2);
+  font-style: italic;
+}
+#image-placeholder.hidden { display: none; }
+
+#structure-panel {
+  grid-area: structure;
+  background: var(--surface2);
+  padding: 12px 16px;
+  overflow: auto;
+  color: var(--text);
+}
+#structure-panel h3 {
+  margin: 0 0 8px 0;
+  font-size: 11px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+/* Avertissement SOF2 / progressive */
+.sof2-warning {
+  background: #3a2a15;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  border-radius: 3px;
+}
+.sof2-warning.hidden { display: none; }
+
+/* Arbre des segments */
+.seg-list {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.seg-item {
+  display: grid;
+  grid-template-columns: 16px 80px 90px 70px 1fr auto;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+  align-items: center;
+  border: 1px solid transparent;
+}
+.seg-item:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+.seg-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.seg-dot.header { background: var(--color-header); }
+.seg-dot.scan   { background: var(--color-scan); }
+.seg-dot.rst    { background: var(--color-rst); }
+.seg-dot.eoi    { background: var(--text2); }
+
+.seg-type   { color: var(--text); font-weight: 600; }
+.seg-offset { color: var(--text2); }
+.seg-length { color: var(--text2); }
+.seg-info   { color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.seg-jump {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  color: var(--text2);
+}
+.seg-jump:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Détails dépliables sous une ligne segment (DQT, DHT, SOF, SCAN) */
+.seg-details {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  margin: 4px 0 8px 32px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border-left: 2px solid var(--border2);
+  color: var(--text2);
+}
+.seg-details strong { color: var(--text); }
+
+/* Heatmap DQT 8×8 */
+.dqt-matrix {
+  display: inline-grid;
+  grid-template-columns: repeat(8, 22px);
+  gap: 1px;
+  margin-top: 6px;
+}
+.dqt-cell {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: #fff;
+  text-shadow: 0 0 2px #000;
+  font-family: var(--font-mono);
+}
+
+/* Histogramme des longueurs de codes Huffman (DHT) */
+.dht-bars {
+  display: grid;
+  grid-template-columns: repeat(16, 16px);
+  gap: 1px;
+  margin-top: 6px;
+  align-items: end;
+  height: 48px;
+}
+.dht-bar {
+  background: var(--color-scan);
+  width: 16px;
+  position: relative;
+}
+.dht-bar-label {
+  position: absolute;
+  bottom: -14px;
+  left: 0;
+  width: 16px;
+  text-align: center;
+  font-size: 8px;
+  color: var(--text2);
+}
+
+/* Onglets du panneau Structure (cf. SPECS §3.2) — sticky pour rester visible au scroll */
+.panel-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--surface);
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.panel-tabs .tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 14px;
+  color: var(--text2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-radius: 0;
+  cursor: pointer;
+}
+.panel-tabs .tab:hover {
+  background: transparent;
+  color: var(--text);
+  border-bottom-color: var(--border2);
+}
+.panel-tabs .tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Liste des RST markers dans les détails du segment SCAN */
+.rst-list {
+  max-height: 140px;
+  overflow-y: auto;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text2);
+}
+.rst-list .rst-entry {
+  display: inline-block;
+  margin-right: 10px;
+}
+.rst-list .rst-entry .rst-idx { color: var(--color-rst); }
+
+/* ============================================================
+   Barre de statut (en haut de l'app)
+   ============================================================ */
+#status-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 28px;
+  background: #111;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text2);
+  z-index: 100;
+  gap: 16px;
+}
+#status-bar .status-item {
+  display: flex;
+  gap: 4px;
+}
+#status-bar .status-label {
+  color: var(--text2);
+}
+#status-bar .status-value {
+  color: var(--text);
+}
+#status-bar.hidden { display: none; }
+
+/* Décale l'app pour laisser de la place à la status bar */
+#app:not(.hidden) {
+  padding-top: 28px;
+  height: 100vh;
+}
+
+/* ============================================================
+   Bandeau warning (au-dessus du hex viewer)
+   ============================================================ */
+.warning-banner {
+  background: #3a2a15;
+  border-bottom: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 6px 12px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+}
+.warning-banner.hidden { display: none; }
+
+/* ============================================================
+   Hex viewer — phase 3 : virtualisé (cf. SPECS §6.1)
+   Lignes en position absolute, hauteur fixe HEX.lineHeight (20px),
+   recyclées depuis un pool DOM (~150 éléments).
+   ============================================================ */
+.hex-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: 80px 1fr 200px;
+  gap: 16px;
+  padding: 0 12px;
+  white-space: nowrap;
+  height: 20px;
+  line-height: 20px;
+  box-sizing: border-box;
+}
+.hex-line:hover {
+  background: var(--surface2);
+}
+/* Surbrillance temporaire après scrollHexToOffset() */
+.hex-line.hex-line-highlight {
+  background: rgba(232, 184, 109, 0.22);
+  transition: background 300ms;
+}
+.hex-offset {
+  color: var(--text2);
+}
+.hex-bytes {
+  color: var(--text);
+  letter-spacing: 0.5px;
+}
+.hex-ascii {
+  color: var(--text2);
+  letter-spacing: 0;
+}
+.hex-byte {
+  display: inline-block;
+  padding: 0 2px;
+  border-radius: 2px;
+  cursor: text;
+}
+.hex-byte:hover { background: var(--border); }
+
+/* Octet sélectionné — couleur rouge atténuée (cf. SPECS §4.4) */
+.hex-byte.selected,
+.hex-ascii-char.selected {
+  background: rgba(232, 109, 109, 0.35);
+  color: #fff;
+}
+.hex-byte.cursor,
+.hex-ascii-char.cursor {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.hex-byte.editing {
+  background: var(--accent);
+  color: #1a1a1a;
+}
+
+/* Marqueur de clic — octet exact sur lequel l'utilisateur a cliqué (distinct du curseur d'édition) */
+.hex-byte.hex-cursor-click,
+.hex-ascii-char.hex-cursor-click {
+  outline: 1px solid var(--accent);   /* contour jaune visible par-dessus la sélection */
+  outline-offset: -1px;
+  border-radius: 2px;
+}
+
+/* Coloration des octets selon le segment d'appartenance (cf. SPECS §4.4) */
+.hex-byte.in-header { color: var(--color-header); }
+.hex-byte.in-scan   { color: var(--color-scan); }
+.hex-byte.in-rst    { color: var(--color-rst); }
+
+.hex-ascii { user-select: none; }
+.hex-ascii-char {
+  display: inline-block;
+  padding: 0 1px;
+  border-radius: 2px;
+  cursor: text;
+}
+.hex-ascii-char:hover { background: var(--border); }
+
+/* ============================================================
+   Panneau Outils (Édition rapide) — cf. SPECS §4.5
+   ============================================================ */
+#tools-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 11px;
+}
+.tools-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.tools-row .tools-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text2);
+  min-width: 90px;
+}
+.tools-row input[type="text"],
+.tools-row input[type="number"] {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  padding: 4px 6px;
+  border-radius: 2px;
+  width: 70px;
+}
+.tools-row select {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  padding: 4px 6px;
+  border-radius: 2px;
+}
+.tools-row button.tool {
+  font-size: 11px;
+  padding: 4px 10px;
+}
+.tools-row button.tool.swap-armed {
+  background: var(--color-sel);
+  color: #1a1a1a;
+  border-color: var(--color-sel);
+}
+
+#selection-info {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text2);
+  margin-bottom: 4px;
+}
+#selection-info strong { color: var(--text); }
+
+/* Actions flottantes à droite de la barre d'onglets */
+.panel-tabs-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 8px;
+}
+.panel-action-btn {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 2px 8px;
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: opacity var(--transition);
+}
+.panel-action-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.panel-action-btn:not(:disabled):hover {
+  background: var(--border2);
+}
+.panel-action-count {
+  font-size: 11px;
+  color: var(--text2);
+}
+
+/* Bandeau « warning critique » au-dessus des outils */
+.critical-warning {
+  background: rgba(232, 109, 109, 0.12);
+  border: 1px solid var(--color-sel);
+  color: var(--color-sel);
+  padding: 6px 10px;
+  font-size: 11px;
+  border-radius: 3px;
+}
+.critical-warning.hidden { display: none; }
+
+/* ============================================================
+   Highlight MCU sur l'image (overlay canvas + ancien div)
+   - #overlay-canvas (phase 3) : canvas plein-frame pour highlights
+     bidirectionnels (octet↔MCU). Couvre exactement #image-canvas.
+   - #mcu-overlay (phase 4) : div simple pour sélection persistante.
+   ============================================================ */
+#overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  image-rendering: pixelated;
+  z-index: 4;
+}
+#mcu-overlay {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid var(--accent);
+  background: rgba(232, 184, 109, 0.15);
+  box-sizing: border-box;
+  display: none;
+  z-index: 5;
+}
+#mcu-overlay.visible { display: block; }
+
+/* Tooltip pour octets hors scan (survol hex viewer) */
+#byte-tooltip {
+  position: fixed;
+  z-index: 250;
+  background: #111;
+  border: 1px solid var(--border2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#byte-tooltip.hidden { display: none; }
+
+/* Survol d'un octet (hex viewer) — léger highlight */
+.hex-byte.byte-hover { background: rgba(232, 184, 109, 0.32); }
+
+/* ============================================================
+   Phase 5 — Toolbar globale, exports, historique, toast
+   ============================================================ */
+#status-bar { padding-right: 8px; }
+.status-spacer { flex: 1; }
+.status-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.status-actions button {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  padding: 3px 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text);
+  border-radius: 2px;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.status-actions button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.status-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.status-actions button:disabled:hover {
+  border-color: var(--border2);
+  color: var(--text);
+}
+.status-actions .sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+.status-actions label.toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text2);
+  font-size: 10px;
+  cursor: pointer;
+}
+.status-actions label.toggle input { margin: 0; }
+
+.export-menu {
+  position: fixed;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  padding: 4px 0;
+  min-width: 240px;
+  z-index: 200;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  font-family: var(--font-ui);
+}
+.export-menu.hidden { display: none; }
+.export-menu button {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 0;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.export-menu button:hover {
+  background: var(--surface);
+  color: var(--accent);
+  border: none;
+}
+.export-menu .menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+#toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface2);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 12px;
+  z-index: 500;
+  opacity: 0;
+  transition: opacity 200ms;
+  pointer-events: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+#toast.visible { opacity: 1; }
+#toast.error { border-color: var(--color-sel); color: var(--color-sel); }
+
+#tab-history { padding-top: 4px; }
+.history-empty {
+  color: var(--text2);
+  font-size: 11px;
+  font-style: italic;
+  padding: 8px 0;
+}
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.history-item {
+  display: grid;
+  grid-template-columns: 28px 90px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 6px;
+  cursor: pointer;
+  border-radius: 2px;
+  border: 1px solid transparent;
+}
+.history-item:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+.history-item.current {
+  background: rgba(232, 184, 109, 0.08);
+  border-color: var(--accent);
+}
+.history-idx { color: var(--text2); text-align: right; }
+.history-op  { color: var(--accent); font-weight: 600; }
+.history-detail { color: var(--text2); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-restore {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.history-restore:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Tooltip simple via data-tooltip */
+[data-tooltip] { position: relative; }
+[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: #000;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  white-space: nowrap;
+  z-index: 50;
+  pointer-events: none;
+}
+
+/* Indicateur mode no-live-preview */
+#image-container { position: relative; }
+#image-container.paused::before {
+  content: 'Live preview désactivé';
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--surface2);
+  color: var(--text2);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  padding: 3px 8px;
+  border: 1px solid var(--border2);
+  border-radius: 2px;
+  z-index: 6;
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     Écran d'accueil (cf. SPECS §7)
+     ============================================================ -->
+<div id="welcome-screen">
+  <div class="welcome-title">JPG Datamoshing Explorer</div>
+  <div class="welcome-subtitle">Explorer, corrompre, et observer la structure interne d'un fichier JPG</div>
+
+  <div id="drop-zone">
+    <p class="main">Glissez un fichier JPG ici</p>
+    <p>ou</p>
+    <button class="primary" id="open-btn">Ouvrir un fichier</button>
+    <input type="file" id="file-input" accept=".jpg,.jpeg,image/jpeg" hidden>
+  </div>
+
+  <div class="tutorial">
+    Le <strong>datamoshing</strong> consiste à corrompre volontairement les octets d'un fichier image
+    pour produire des glitchs visuels contrôlés. Le format JPG, par sa compression entropique,
+    réagit de façon riche à ces corruptions : décalages chromatiques, propagations horizontales,
+    saturations imprévisibles. Cet outil affiche en parallèle les <strong>octets bruts</strong>,
+    le <strong>rendu image</strong> et la <strong>structure</strong> du fichier.
+  </div>
+
+  <div class="error-msg" id="welcome-error"></div>
+</div>
+
+<!-- ============================================================
+     Barre de statut
+     ============================================================ -->
+<div id="status-bar" class="hidden">
+  <div class="status-item">
+    <span class="status-label">Fichier:</span>
+    <span class="status-value" id="status-filename">—</span>
+  </div>
+  <div class="status-item">
+    <span class="status-label">Taille:</span>
+    <span class="status-value" id="status-size">—</span>
+  </div>
+  <div class="status-item">
+    <span class="status-label">Dimensions:</span>
+    <span class="status-value" id="status-dims">—</span>
+  </div>
+  <div class="status-item">
+    <span class="status-label">Subsampling:</span>
+    <span class="status-value" id="status-subsampling">—</span>
+  </div>
+  <div class="status-item">
+    <span class="status-label">RST:</span>
+    <span class="status-value" id="status-rst">—</span>
+  </div>
+
+  <div class="status-spacer"></div>
+
+  <!-- Toolbar globale — phase 5 -->
+  <div class="status-actions">
+    <label class="toggle" title="Désactiver le re-rendu image en direct (utile pour les éditions intensives)">
+      <input type="checkbox" id="toggle-live-preview" checked>
+      Live preview
+    </label>
+    <div class="sep"></div>
+    <button id="btn-undo" disabled title="Annuler la dernière opération (Ctrl/Cmd+Z)">↶ Undo</button>
+    <button id="btn-redo" disabled title="Rétablir l'opération annulée (Ctrl/Cmd+Y / Ctrl/Cmd+Shift+Z)">↷ Redo</button>
+    <div class="sep"></div>
+    <button id="btn-reset" title="Restaurer le fichier original">Reset</button>
+    <button id="btn-export" title="Télécharger / exporter">Export ▾</button>
+    <button id="btn-close" title="Fermer le fichier et revenir à l'écran d'accueil">Fermer</button>
+  </div>
+</div>
+
+<!-- Menu Export (positionné au clic, caché par défaut) -->
+<div id="export-menu" class="export-menu hidden">
+  <button data-export="jpg">Télécharger .jpg (buffer courant)</button>
+  <button data-export="png">Télécharger .png (rendu canvas)</button>
+  <div class="menu-sep"></div>
+  <button data-export="diff">Export diff binaire (.json)</button>
+  <button data-export="ops">Export séquence d'opérations (.json)</button>
+  <button data-export="structure">Export structure parsée (.json)</button>
+  <div class="menu-sep"></div>
+  <button data-export="base64">Copier canvas en base64 (presse-papier)</button>
+</div>
+
+<!-- Toast notifications -->
+<div id="toast"></div>
+
+<!-- Tooltip flottant pour les octets hors scan (phase 3) -->
+<div id="byte-tooltip" class="hidden"></div>
+
+<!-- ============================================================
+     Application principale (cachée par défaut)
+     ============================================================ -->
+<div id="app" class="hidden">
+  <div id="hex-container">
+    <div id="hex-warning" class="warning-banner hidden"></div>
+    <!-- Phase 3 : conteneur virtualisé.
+         .hex-scroll = élément scrollable (overflow auto).
+         .hex-spacer = élément interne dont la hauteur = nbLignes × HEX.lineHeight.
+         Les lignes .hex-line sont positionnées en absolute, recyclées via un pool. -->
+    <div id="hex-scroll" class="hex-scroll">
+      <div id="hex-spacer" class="hex-spacer">
+        <div id="hex-content"></div>
+      </div>
+    </div>
+  </div>
+  <div id="image-container">
+    <div id="image-wrap">
+      <div id="image-placeholder" class="hidden">En attente d'image…</div>
+      <!-- Phase 3 : sous-conteneur position:relative pour aligner le canvas
+           overlay sur le canvas image (pixel-précis), indépendant du flexbox parent. -->
+      <div id="image-canvas-wrap" style="position:relative; line-height:0; display:inline-block;">
+        <canvas id="image-canvas"></canvas>
+        <canvas id="overlay-canvas"></canvas>
+        <div id="mcu-overlay"></div>
+      </div>
+      <div id="image-error" class="hidden">Image indécodable</div>
+    </div>
+  </div>
+  <div id="structure-panel">
+    <div class="panel-tabs">
+      <button class="tab active" data-tab="structure">Structure</button>
+      <button class="tab" data-tab="tools">Outils</button>
+      <button class="tab" data-tab="history">Historique</button>
+      <!-- Bouton Undo intégré dans la barre d'onglets — reste visible au scroll -->
+      <div class="panel-tabs-actions">
+        <button id="undo-btn" class="panel-action-btn" title="Annuler (Ctrl+Z)" disabled>↩ Undo</button>
+        <span id="undo-count" class="panel-action-count"></span>
+      </div>
+    </div>
+    <div id="tab-structure" class="tab-content active">
+      <div id="sof2-warning" class="sof2-warning hidden">
+        JPEG progressif (SOF2) détecté — le mapping octets/pixels ne sera pas précis (v1 baseline-only).
+      </div>
+      <div id="structure-tree">
+        <div style="color: var(--text2); font-size: 11px;">Aucun fichier chargé.</div>
+      </div>
+    </div>
+    <div id="tab-tools" class="tab-content">
+      <div id="critical-warning" class="critical-warning hidden"></div>
+      <div id="selection-info">Aucune sélection.</div>
+      <div id="tools-panel">
+
+        <!-- Barre de progression du décodage Huffman (Mode C) — cf. §6.5 -->
+        <div id="huffman-bar" style="display:none; align-items:center; gap:6px; margin-top:4px;">
+          <progress id="huffman-progress" max="100" value="0" style="flex:1; height:6px;"></progress>
+          <span id="huffman-status" style="font-size:10px; color:var(--text2);">0%</span>
+          <button id="huffman-cancel" style="font-size:10px; padding:1px 5px; background:var(--surface2); color:var(--text2); border:1px solid var(--border2); border-radius:3px; cursor:pointer;">✕</button>
+        </div>
+
+        <!-- Outils opérant sur la sélection courante — cf. §4.5 -->
+        <div class="tools-row">
+          <span class="tools-label">Aléatoire</span>
+          <button class="tool" data-tool="randomize">Randomize</button>
+          <span style="color: var(--text2);">Bits :</span>
+          <input type="number" id="tool-bitflip-n" value="8" min="1" max="1024" style="width:60px">
+          <button class="tool" data-tool="bitflip">Bit flip</button>
+        </div>
+
+        <div class="tools-row">
+          <span class="tools-label">Arithmétique</span>
+          <span style="color: var(--text2);">Hex :</span>
+          <input type="text" id="tool-xor-val" value="FF" maxlength="2" style="width:48px">
+          <button class="tool" data-tool="xor">XOR</button>
+          <span style="color: var(--text2);">N :</span>
+          <input type="number" id="tool-addsub-val" value="1" min="-255" max="255" style="width:60px">
+          <button class="tool" data-tool="add">Add</button>
+          <button class="tool" data-tool="sub">Sub</button>
+        </div>
+
+        <div class="tools-row">
+          <span class="tools-label">Transformation</span>
+          <span style="color: var(--text2);">Shift :</span>
+          <input type="number" id="tool-shift-n" value="1" style="width:60px">
+          <button class="tool" data-tool="shift">Shift</button>
+          <button class="tool" data-tool="reverse">Reverse</button>
+          <button class="tool" data-tool="repeat">Repeat</button>
+        </div>
+
+        <div class="tools-row">
+          <span class="tools-label">RST</span>
+          <span style="color: var(--text2);">Index :</span>
+          <input type="number" id="tool-rst-idx" value="0" min="0" max="7" style="width:48px">
+          <button class="tool" data-tool="inject-rst">Inject RST</button>
+          <button class="tool" data-tool="delete-rst">Delete RST</button>
+        </div>
+
+        <div class="tools-row">
+          <span class="tools-label">Blocs</span>
+          <button class="tool" data-tool="swap">Swap blocks</button>
+          <span id="swap-status" style="color: var(--text2); font-size: 10px;"></span>
+        </div>
+
+        <div class="tools-row">
+          <span class="tools-label">Insertion</span>
+          <span style="color: var(--text2);">Hex :</span>
+          <input type="text" id="tool-insert-val" value="00" maxlength="2" style="width:48px">
+          <button class="tool" data-tool="insert-byte">Insert</button>
+          <button class="tool" data-tool="delete-byte">Delete</button>
+        </div>
+
+      </div>
+    </div>
+    <div id="tab-history" class="tab-content">
+      <div style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
+        <button id="btn-history-clear" class="tool" style="font-size: 11px;">Vider l'historique</button>
+        <span id="history-summary" style="color: var(--text2); font-size: 11px;">—</span>
+      </div>
+      <div id="history-container">
+        <div class="history-empty">Aucune opération enregistrée.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// État global de l'application (source de vérité unique)
+// cf. SPECS §3.3
+// ============================================================
+const state = {
+  buffer: null,         // Uint8Array — buffer courant (modifiable)
+  originalBuffer: null, // copie immuable pour reset
+  filename: '',
+  fileSize: 0,
+  parsed: null,         // résultat parseJpeg() — rempli en phase 2
+
+  // Phase 5 — historique
+  undoStack: [],        // diffs annulables ({ op, diffs:[{offset,old,new}], meta? })
+  redoStack: [],        // diffs rétablissables
+  opsLog: [],           // séquence d'opérations pour replay/export (§4.7)
+  livePreview: true,    // mode no-live-preview si false
+};
+
+// Constantes
+const HEX_MAX_LINES = 1024;             // limite hex viewer non-virtualisé
+const HEX_MAX_BYTES = HEX_MAX_LINES * 16;
+const HEX_BYTES_PER_LINE = 16;
+
+// Références DOM
+const $ = (id) => document.getElementById(id);
+const welcomeScreen = $('welcome-screen');
+const welcomeError  = $('welcome-error');
+const dropZone      = $('drop-zone');
+const fileInput     = $('file-input');
+const openBtn       = $('open-btn');
+const appEl         = $('app');
+const statusBar     = $('status-bar');
+const hexContent    = $('hex-content');
+const hexWarning    = $('hex-warning');
+const imageCanvas   = $('image-canvas');
+const imageError    = $('image-error');
+const imagePlaceholder = $('image-placeholder');
+const structureTree = $('structure-tree');
+const sof2Warning   = $('sof2-warning');
+const imageCtx      = imageCanvas.getContext('2d');
+
+// État interne pour le rendu image
+let currentObjectUrl = null;   // URL.createObjectURL en cours, à révoquer
+let renderTimer      = null;   // timer du debounce
+let lastValidRender  = false;  // a-t-on déjà un rendu valide affiché ?
+
+// ============================================================
+// Formatage utilitaire pour le hex viewer
+// ============================================================
+
+// Convertit un nombre en offset hex (6 chiffres majuscules)
+function formatOffset(n) {
+  return n.toString(16).toUpperCase().padStart(6, '0');
+}
+
+// Convertit un octet en hex 2 chiffres majuscules
+function formatByte(b) {
+  return b.toString(16).toUpperCase().padStart(2, '0');
+}
+
+// Convertit un octet en représentation ASCII (point si non-imprimable)
+function byteToAscii(b) {
+  if (b >= 0x20 && b <= 0x7E) {
+    return String.fromCharCode(b);
+  }
+  return '.';
+}
+
+// ============================================================
+// Hex viewer virtualisé (cf. SPECS §6.1) — phase 3
+// ----------------------------------------------------------------
+// Stratégie :
+//  - Le conteneur scrollable .hex-scroll a un enfant .hex-spacer dont
+//    la hauteur = nbLignes × HEX.lineHeight (donc un scrollbar correct).
+//  - On rend uniquement les lignes visibles + un buffer de garde
+//    (HEX.bufferLines) au-dessus et en-dessous.
+//  - Un pool de divs .hex-line est réutilisé : on déplace (top) et
+//    re-remplit le contenu plutôt que de créer/détruire des nœuds.
+//  - Coloration : un Uint8Array byteTypeArr (0=neutre, 1=header,
+//    2=scan, 3=rst) est pré-calculé à chaque parse → O(1) par octet.
+// ============================================================
+const HEX = {
+  lineHeight: 20,      // px — doit matcher la règle CSS .hex-line height
+  bufferLines: 50,     // lignes rendues au-delà du viewport (haut+bas)
+  scrollEl: null,      // élément scrollable (#hex-scroll)
+  spacerEl: null,      // élément de hauteur totale (#hex-spacer)
+  pool: [],            // pool d'éléments .hex-line réutilisés
+  totalLines: 0,
+  totalBytes: 0,
+  firstRendered: -1,
+  lastRendered: -1,
+  buffer: null,        // référence au buffer courant
+  initialized: false,
+};
+
+// Tableau plat « offset → type d'octet ». Recalculé à chaque parse.
+// 0 = neutre, 1 = header/marqueur, 2 = scan, 3 = RST marker.
+let byteTypeArr = null;
+
+// Construit byteTypeArr à partir du parsed courant. À rappeler après
+// chaque parseJpeg() ou modification structurelle du buffer.
+function buildByteTypeArray(buffer, parsed) {
+  const arr = new Uint8Array(buffer.length);
+  if (!parsed || !parsed.segments) return arr;
+  for (const seg of parsed.segments) {
+    let v;
+    if (seg.type === 'SCAN') v = 2;
+    else if (seg.type.startsWith('RST')) v = 3;
+    else v = 1;
+    const end = Math.min(seg.offset + seg.length, arr.length);
+    for (let i = seg.offset; i < end; i++) arr[i] = v;
+  }
+  // RST markers à l'intérieur du scan
+  if (parsed.segments) {
+    for (const seg of parsed.segments) {
+      if (seg.type !== 'SCAN' || !seg.rstMarkers) continue;
+      for (const r of seg.rstMarkers) {
+        if (r.offset < arr.length) arr[r.offset] = 3;
+        if (r.offset + 1 < arr.length) arr[r.offset + 1] = 3;
+      }
+    }
+  }
+  return arr;
+}
+
+// Conversion type d'octet → classe CSS de coloration
+function byteTypeClass(t) {
+  if (t === 1) return 'in-header';
+  if (t === 2) return 'in-scan';
+  if (t === 3) return 'in-rst';
+  return '';
+}
+
+// Initialisation paresseuse du hex viewer virtualisé. Appelée par renderHex().
+function initVirtualHex() {
+  if (HEX.initialized) return;
+  HEX.scrollEl = $('hex-scroll');
+  HEX.spacerEl = $('hex-spacer');
+  if (!HEX.scrollEl || !HEX.spacerEl) return;
+  // Vide le conteneur de contenu interne (peut subsister du HTML phase 2)
+  const content = $('hex-content');
+  if (content && content.parentNode) content.parentNode.removeChild(content);
+  HEX.scrollEl.addEventListener('scroll', onHexScroll, { passive: true });
+  // Recalcule la fenêtre visible si le panneau change de taille
+  window.addEventListener('resize', () => { if (HEX.buffer) onHexScroll(); });
+  HEX.initialized = true;
+}
+
+// Point d'entrée du rendu — appelé après chaque mutation du buffer.
+function renderHex(buffer) {
+  initVirtualHex();
+  if (!HEX.scrollEl || !HEX.spacerEl) return;
+
+  HEX.buffer = buffer;
+  HEX.totalBytes = buffer.length;
+  HEX.totalLines = Math.ceil(buffer.length / HEX_BYTES_PER_LINE);
+
+  // Hauteur totale virtuelle (donne le bon scrollbar)
+  HEX.spacerEl.style.height = (HEX.totalLines * HEX.lineHeight) + 'px';
+
+  // Plus de warning de limite — la virtualisation gère tout
+  hexWarning.classList.add('hidden');
+
+  // Invalidation : force le re-rendu de toutes les lignes pool
+  HEX.firstRendered = -1;
+  HEX.lastRendered = -1;
+  onHexScroll();
+}
+
+// Calcule la plage de lignes à rendre et met à jour le pool.
+function onHexScroll() {
+  if (!HEX.scrollEl || !HEX.buffer) return;
+  const scrollTop = HEX.scrollEl.scrollTop;
+  const viewportH = HEX.scrollEl.clientHeight || 1;
+  const firstVisible = Math.floor(scrollTop / HEX.lineHeight);
+  const lastVisible  = Math.ceil((scrollTop + viewportH) / HEX.lineHeight);
+  const first = Math.max(0, firstVisible - HEX.bufferLines);
+  const last  = Math.min(HEX.totalLines - 1, lastVisible + HEX.bufferLines);
+
+  if (first === HEX.firstRendered && last === HEX.lastRendered) return;
+
+  const needed = last - first + 1;
+
+  // Étend le pool si nécessaire
+  while (HEX.pool.length < needed) {
+    HEX.pool.push(createHexLineElement());
+  }
+  // Cache les éléments du pool en trop (on ne les détruit pas)
+  for (let i = needed; i < HEX.pool.length; i++) {
+    HEX.pool[i].style.display = 'none';
+  }
+
+  for (let i = 0; i < needed; i++) {
+    const el = HEX.pool[i];
+    const lineIndex = first + i;
+    el.style.display = '';
+    renderLine(el, lineIndex);
+  }
+
+  HEX.firstRendered = first;
+  HEX.lastRendered = last;
+}
+
+// Construit un élément .hex-line vide (16 cellules hex + 16 cellules ascii).
+function createHexLineElement() {
+  const line = document.createElement('div');
+  line.className = 'hex-line';
+
+  const offsetSpan = document.createElement('span');
+  offsetSpan.className = 'hex-offset';
+  line.appendChild(offsetSpan);
+
+  const bytesSpan = document.createElement('span');
+  bytesSpan.className = 'hex-bytes';
+  for (let i = 0; i < HEX_BYTES_PER_LINE; i++) {
+    const b = document.createElement('span');
+    b.className = 'hex-byte';
+    bytesSpan.appendChild(b);
+    if (i < HEX_BYTES_PER_LINE - 1) bytesSpan.appendChild(document.createTextNode(' '));
+  }
+  line.appendChild(bytesSpan);
+
+  const asciiSpan = document.createElement('span');
+  asciiSpan.className = 'hex-ascii';
+  for (let i = 0; i < HEX_BYTES_PER_LINE; i++) {
+    const c = document.createElement('span');
+    c.className = 'hex-ascii-char';
+    asciiSpan.appendChild(c);
+  }
+  line.appendChild(asciiSpan);
+
+  HEX.spacerEl.appendChild(line);
+  return line;
+}
+
+// Remplit le contenu d'une ligne du pool pour l'index de ligne donné.
+function renderLine(el, lineIndex) {
+  const offset = lineIndex * HEX_BYTES_PER_LINE;
+  el.style.top = (lineIndex * HEX.lineHeight) + 'px';
+  el.dataset.line = String(lineIndex);
+
+  const offsetSpan = el.firstChild;
+  offsetSpan.textContent = formatOffset(offset);
+
+  const bytesSpan = offsetSpan.nextSibling;
+  const asciiSpan = bytesSpan.nextSibling;
+
+  // Les .hex-byte sont à l'index pair (les text-nodes ' ' au milieu sont à l'index impair)
+  for (let i = 0; i < HEX_BYTES_PER_LINE; i++) {
+    const byteEl  = bytesSpan.childNodes[i * 2];
+    const asciiEl = asciiSpan.childNodes[i];
+    const abs = offset + i;
+    if (abs >= HEX.totalBytes) {
+      byteEl.textContent = '';
+      byteEl.className = 'hex-byte';
+      byteEl.removeAttribute('data-offset');
+      asciiEl.textContent = '';
+      asciiEl.removeAttribute('data-offset');
+      continue;
+    }
+    const b = HEX.buffer[abs];
+    byteEl.textContent = formatByte(b);
+    const colorCls = byteTypeArr ? byteTypeClass(byteTypeArr[abs]) : '';
+    byteEl.className = 'hex-byte' + (colorCls ? ' ' + colorCls : '');
+    byteEl.dataset.offset = String(abs);
+    asciiEl.textContent = byteToAscii(b);
+    asciiEl.dataset.offset = String(abs);
+  }
+}
+
+// Échappe les caractères HTML dangereux dans la colonne ASCII
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+// ============================================================
+// Mise à jour de la barre de statut
+// Les champs « dimensions / subsampling / RST » seront remplis en phase 2
+// ============================================================
+function updateStatusBar() {
+  $('status-filename').textContent    = state.filename || '—';
+  $('status-size').textContent        = state.fileSize
+    ? state.fileSize.toLocaleString('fr-FR') + ' octets'
+    : '—';
+
+  const p = state.parsed;
+  if (p && p.width > 0 && p.height > 0) {
+    $('status-dims').textContent = `${p.width}×${p.height}`;
+  } else {
+    $('status-dims').textContent = '—';
+  }
+  $('status-subsampling').textContent = p ? p.subsampling : '—';
+
+  // RST : on cherche le segment SCAN et on compte les RST markers
+  if (p && p.segments) {
+    const scan = p.segments.find(s => s.type === 'SCAN');
+    const rstCount = (scan && scan.rstMarkers) ? scan.rstMarkers.length : 0;
+    if (rstCount > 0) {
+      $('status-rst').textContent = `${rstCount} markers · DRI ${p.restartInterval || 0}`;
+    } else {
+      $('status-rst').textContent = 'aucun';
+    }
+  } else {
+    $('status-rst').textContent = '—';
+  }
+}
+
+// ============================================================
+// Parser JPG (cf. SPECS §2.1, §4.2, §6.3)
+// Lit linéairement le buffer, produit une liste de segments.
+// Tolérant : tout problème → console.warn + on continue (jamais de throw).
+// ============================================================
+
+// Table des noms de marqueurs courants — utilisée pour étiqueter
+// les segments dans la sortie du parser. Tout marqueur inconnu garde
+// son code hex (« 0xFFxx ») comme nom.
+const MARKER_NAMES = {
+  0xC0: 'SOF0',  0xC1: 'SOF1',  0xC2: 'SOF2',  0xC3: 'SOF3',
+  0xC4: 'DHT',   0xC5: 'SOF5',  0xC6: 'SOF6',  0xC7: 'SOF7',
+  0xC9: 'SOF9',  0xCA: 'SOF10', 0xCB: 'SOF11',
+  0xCD: 'SOF13', 0xCE: 'SOF14', 0xCF: 'SOF15',
+  0xD8: 'SOI',   0xD9: 'EOI',   0xDA: 'SOS',
+  0xDB: 'DQT',   0xDC: 'DNL',   0xDD: 'DRI',
+  0xDE: 'DHP',   0xDF: 'EXP',
+  0xFE: 'COM',
+};
+
+// Codes ratio H/V → libellé de subsampling courant.
+// Pour les cas non-tabulés, on retombe sur « custom H×V ».
+function deriveSubsampling(components) {
+  if (!components || components.length === 0) return '—';
+  if (components.length === 1) return '4:0:0'; // grayscale
+  // Composante Y (premier composant) donne le pas de référence
+  const y = components[0];
+  // Convention : si Y a (H=1,V=1) et autres aussi → 4:4:4
+  //              si Y a (H=2,V=1) → 4:2:2
+  //              si Y a (H=2,V=2) → 4:2:0
+  //              si Y a (H=1,V=2) → 4:4:0 (rare)
+  const h = y.h, v = y.v;
+  if (h === 1 && v === 1) return '4:4:4';
+  if (h === 2 && v === 1) return '4:2:2';
+  if (h === 2 && v === 2) return '4:2:0';
+  if (h === 1 && v === 2) return '4:4:0';
+  return `custom ${h}×${v}`;
+}
+
+// Calcule la taille MCU en pixels selon le subsampling.
+// MCU = (8 × Hmax) × (8 × Vmax) pixels.
+function computeMcuSize(components) {
+  if (!components || components.length === 0) return { w: 8, h: 8 };
+  let hMax = 1, vMax = 1;
+  for (const c of components) {
+    if (c.h > hMax) hMax = c.h;
+    if (c.v > vMax) vMax = c.v;
+  }
+  return { w: 8 * hMax, h: 8 * vMax };
+}
+
+// Parse APP0 (JFIF) : on en extrait identifier + version.
+// Format APP0 JFIF : 'JFIF\0' (5o) + version major (1o) + version minor (1o) + ...
+function parseApp0(buffer, dataOffset, dataLength) {
+  if (dataLength < 7) return null;
+  // Lit la chaîne nul-terminée
+  let id = '';
+  for (let i = 0; i < 5 && i < dataLength; i++) {
+    const b = buffer[dataOffset + i];
+    if (b === 0) break;
+    id += String.fromCharCode(b);
+  }
+  const major = buffer[dataOffset + 5];
+  const minor = buffer[dataOffset + 6];
+  return {
+    identifier: id,
+    version: major + '.' + minor.toString().padStart(2, '0'),
+  };
+}
+
+// Parse APP1 (Exif/XMP). On ne fait que reconnaître l'identifier.
+function parseApp1(buffer, dataOffset, dataLength) {
+  let id = '';
+  const maxRead = Math.min(6, dataLength);
+  for (let i = 0; i < maxRead; i++) {
+    const b = buffer[dataOffset + i];
+    if (b === 0) break;
+    id += String.fromCharCode(b);
+  }
+  return { identifier: id };
+}
+
+// Parse DQT : la table peut contenir plusieurs sous-tables.
+// Format : (precision<<4 | tableId) [1o] + 64 valeurs (1 ou 2 octets selon precision).
+// On retourne la première sous-table trouvée (suffit pour l'affichage).
+function parseDqt(buffer, dataOffset, dataLength) {
+  if (dataLength < 1) return null;
+  const pq = buffer[dataOffset];
+  const precision = (pq >> 4) & 0x0F;   // 0 → 8 bits, 1 → 16 bits
+  const tableId = pq & 0x0F;
+  const valueBytes = precision === 0 ? 1 : 2;
+  if (dataLength < 1 + 64 * valueBytes) return { tableId, precision, matrix: null };
+  const matrix = new Float32Array(64);
+  let p = dataOffset + 1;
+  for (let i = 0; i < 64; i++) {
+    if (valueBytes === 1) {
+      matrix[i] = buffer[p++];
+    } else {
+      matrix[i] = (buffer[p] << 8) | buffer[p + 1];
+      p += 2;
+    }
+  }
+  return { tableId, precision, matrix };
+}
+
+// Parse DHT : on retourne la première sous-table trouvée pour l'affichage.
+// Format : (class<<4 | id) [1o] + 16 octets « nombre de codes par longueur » + valeurs.
+// Les valeurs symboliques sont extraites pour le Mode C (décodage Huffman exact, §4.3).
+function parseDht(buffer, dataOffset, dataLength) {
+  if (dataLength < 17) return null;
+  const tc = buffer[dataOffset];
+  const tableClass = (tc >> 4) & 0x0F;  // 0 = DC, 1 = AC
+  const tableId = tc & 0x0F;
+  const codeCounts = new Array(16);
+  for (let i = 0; i < 16; i++) {
+    codeCounts[i] = buffer[dataOffset + 1 + i];
+  }
+  let total = 0;
+  for (const n of codeCounts) total += n;
+  // Extraction des valeurs symboliques (après les 17 octets d'en-tête DHT)
+  // Nécessaire pour construire la table de décodage canonique en Mode C
+  const values = [];
+  let pos = dataOffset + 17;
+  for (let i = 0; i < total; i++) values.push(buffer[pos++]);
+  return { tableClass, tableId, codeCounts, totalCodes: total, values };
+}
+
+// Parse SOF0/SOF1/SOF2 : dimensions + composants (id, h-sampling, v-sampling, quant table id).
+function parseSof(buffer, dataOffset, dataLength) {
+  if (dataLength < 6) return null;
+  const precision = buffer[dataOffset];
+  const height = (buffer[dataOffset + 1] << 8) | buffer[dataOffset + 2];
+  const width  = (buffer[dataOffset + 3] << 8) | buffer[dataOffset + 4];
+  const nComp  = buffer[dataOffset + 5];
+  const components = [];
+  for (let i = 0; i < nComp; i++) {
+    const off = dataOffset + 6 + i * 3;
+    if (off + 2 >= dataOffset + dataLength) break;
+    const id = buffer[off];
+    const hv = buffer[off + 1];
+    const qt = buffer[off + 2];
+    components.push({
+      id, h: (hv >> 4) & 0x0F, v: hv & 0x0F, qtId: qt,
+    });
+  }
+  return { precision, width, height, components };
+}
+
+// Parse SOS : identifie les composantes du scan (pas d'usage direct ici,
+// mais utile pour l'affichage et le futur décodeur Huffman).
+function parseSosHeader(buffer, dataOffset, dataLength) {
+  if (dataLength < 1) return null;
+  const nComp = buffer[dataOffset];
+  const components = [];
+  for (let i = 0; i < nComp; i++) {
+    const off = dataOffset + 1 + i * 2;
+    if (off + 1 >= dataOffset + dataLength) break;
+    components.push({
+      id: buffer[off],
+      dcId: (buffer[off + 1] >> 4) & 0x0F,
+      acId: buffer[off + 1] & 0x0F,
+    });
+  }
+  return { components };
+}
+
+// Parse DRI : 2 octets big-endian → intervalle de redémarrage.
+function parseDri(buffer, dataOffset, dataLength) {
+  if (dataLength < 2) return { restartInterval: 0 };
+  return { restartInterval: (buffer[dataOffset] << 8) | buffer[dataOffset + 1] };
+}
+
+// Retourne le nom du marqueur. Pour les APPn et tout ce qui n'est pas tabulé,
+// on construit un nom à la volée.
+function markerName(marker) {
+  if (marker >= 0xE0 && marker <= 0xEF) return 'APP' + (marker - 0xE0);
+  if (marker >= 0xD0 && marker <= 0xD7) return 'RST' + (marker - 0xD0);
+  return MARKER_NAMES[marker] || ('0xFF' + marker.toString(16).toUpperCase().padStart(2, '0'));
+}
+
+// Parser principal. Renvoie toujours un objet structuré, même en cas d'erreur
+// (segments partiels + valeurs par défaut). Ne throw jamais.
+function parseJpeg(buffer) {
+  const result = {
+    segments: [],
+    width: 0,
+    height: 0,
+    subsampling: '—',
+    mcuWidth: 16,
+    mcuHeight: 16,
+    mcuCountX: 0,
+    mcuCountY: 0,
+    mcuCount: 0,
+    restartInterval: 0,
+    scanOffset: 0,
+    scanLength: 0,
+    isProgressive: false,
+  };
+
+  if (!buffer || buffer.length < 2) {
+    console.warn('[parseJpeg] buffer trop court');
+    return result;
+  }
+
+  let offset = 0;
+  let sofComponents = null; // mémorisé pour calculer MCU après EOI
+
+  while (offset < buffer.length - 1) {
+    // Tout marqueur doit commencer par 0xFF (cf. §2.1)
+    if (buffer[offset] !== 0xFF) {
+      console.warn(`[parseJpeg] octet inattendu 0x${buffer[offset].toString(16)} à l'offset ${offset}, arrêt`);
+      break;
+    }
+    // Plusieurs 0xFF consécutifs sont autorisés comme padding entre marqueurs (rare)
+    let p = offset;
+    while (p < buffer.length && buffer[p] === 0xFF) p++;
+    if (p >= buffer.length) break;
+    const marker = buffer[p];
+    const markerStart = p - 1; // l'octet 0xFF qui précède
+
+    // SOI : pas de longueur
+    if (marker === 0xD8) {
+      result.segments.push({ type: 'SOI', offset: markerStart, length: 2 });
+      offset = p + 1;
+      continue;
+    }
+
+    // EOI : pas de longueur, fin du fichier
+    if (marker === 0xD9) {
+      result.segments.push({ type: 'EOI', offset: markerStart, length: 2 });
+      offset = p + 1;
+      break;
+    }
+
+    // RST hors scan : ne devrait pas arriver, on log et on continue
+    if (marker >= 0xD0 && marker <= 0xD7) {
+      console.warn(`[parseJpeg] RST${marker - 0xD0} hors scan data à l'offset ${markerStart}`);
+      result.segments.push({ type: `RST${marker - 0xD0}`, offset: markerStart, length: 2 });
+      offset = p + 1;
+      continue;
+    }
+
+    // Tous les autres marqueurs ont un champ longueur (big-endian, inclut les 2 octets de longueur)
+    if (p + 2 >= buffer.length) {
+      console.warn('[parseJpeg] longueur de segment tronquée');
+      break;
+    }
+    const len = (buffer[p + 1] << 8) | buffer[p + 2];
+    if (len < 2) {
+      console.warn(`[parseJpeg] longueur invalide (${len}) pour marqueur 0xFF${marker.toString(16)} à ${markerStart}`);
+      break;
+    }
+    const dataOffset = p + 3;
+    const dataLength = len - 2;
+    const segLength = len + 2; // total : 2 octets marqueur + len (qui inclut le champ longueur)
+
+    let info = null;
+
+    if (marker === 0xE0) {
+      info = parseApp0(buffer, dataOffset, dataLength);
+    } else if (marker === 0xE1) {
+      info = parseApp1(buffer, dataOffset, dataLength);
+    } else if (marker === 0xDB) {
+      info = parseDqt(buffer, dataOffset, dataLength);
+    } else if (marker === 0xC4) {
+      info = parseDht(buffer, dataOffset, dataLength);
+    } else if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) {
+      info = parseSof(buffer, dataOffset, dataLength);
+      if (info) {
+        result.width = info.width;
+        result.height = info.height;
+        sofComponents = info.components;
+        result.subsampling = deriveSubsampling(info.components);
+        const mcu = computeMcuSize(info.components);
+        result.mcuWidth = mcu.w;
+        result.mcuHeight = mcu.h;
+        if (marker === 0xC2) {
+          result.isProgressive = true;
+        }
+      }
+    } else if (marker === 0xDD) {
+      info = parseDri(buffer, dataOffset, dataLength);
+      if (info) result.restartInterval = info.restartInterval;
+    } else if (marker === 0xDA) {
+      info = parseSosHeader(buffer, dataOffset, dataLength);
+    }
+
+    result.segments.push({
+      type: markerName(marker),
+      offset: markerStart,
+      length: segLength,
+      info,
+    });
+
+    // SOS : on entre dans le scan data jusqu'au prochain marqueur non-stuffed non-RST
+    if (marker === 0xDA) {
+      const scanStart = markerStart + segLength;
+      const rstMarkers = [];
+      let s = scanStart;
+      while (s < buffer.length - 1) {
+        if (buffer[s] === 0xFF) {
+          const next = buffer[s + 1];
+          if (next === 0x00) {
+            // byte stuffing : 0xFF 0x00 = octet 0xFF dans le bitstream
+            s += 2;
+            continue;
+          }
+          if (next >= 0xD0 && next <= 0xD7) {
+            rstMarkers.push({ offset: s, index: next - 0xD0 });
+            s += 2;
+            continue;
+          }
+          // Autre marqueur (souvent EOI) : fin du scan, on s'arrête ici
+          break;
+        }
+        s++;
+      }
+      const scanLength = s - scanStart;
+      result.segments.push({
+        type: 'SCAN',
+        offset: scanStart,
+        length: scanLength,
+        rstMarkers,
+      });
+      result.scanOffset = scanStart;
+      result.scanLength = scanLength;
+      offset = s;
+      continue;
+    }
+
+    offset = markerStart + segLength;
+  }
+
+  // Calcul du nombre de MCU une fois SOF et dimensions connues
+  if (result.width > 0 && result.height > 0) {
+    result.mcuCountX = Math.ceil(result.width  / result.mcuWidth);
+    result.mcuCountY = Math.ceil(result.height / result.mcuHeight);
+    result.mcuCount  = result.mcuCountX * result.mcuCountY;
+  }
+
+  return result;
+}
+
+// ============================================================
+// Rendu image (cf. SPECS §4.6, §6.2)
+// Le navigateur fait le décodage JPG natif via Blob → Image → canvas.
+// Debounce 150ms via scheduleRender() pour absorber les modifications rapides.
+// ============================================================
+const RENDER_DEBOUNCE_MS = 150;
+
+function renderImage(uint8arr) {
+  // Révoque l'URL précédente si une autre est encore en attente
+  if (currentObjectUrl) {
+    URL.revokeObjectURL(currentObjectUrl);
+    currentObjectUrl = null;
+  }
+
+  const blob = new Blob([uint8arr], { type: 'image/jpeg' });
+  const url = URL.createObjectURL(blob);
+  currentObjectUrl = url;
+
+  const img = new Image();
+  img.onload = () => {
+    imageCanvas.width = img.naturalWidth;
+    imageCanvas.height = img.naturalHeight;
+    imageCtx.drawImage(img, 0, 0);
+    imageCanvas.classList.add('visible');
+    imageCanvas.classList.remove('degraded');
+    imageError.classList.add('hidden');
+    imagePlaceholder.classList.add('hidden');
+    lastValidRender = true;
+    // Phase 3 : aligne le canvas overlay sur le canvas image (dimensions + scale CSS).
+    syncOverlay();
+    URL.revokeObjectURL(url);
+    if (currentObjectUrl === url) currentObjectUrl = null;
+  };
+  img.onerror = () => {
+    // OBLIGATOIRE : révoquer aussi en cas d'erreur, sinon fuite mémoire
+    URL.revokeObjectURL(url);
+    if (currentObjectUrl === url) currentObjectUrl = null;
+    showDecodeError();
+  };
+  img.src = url;
+}
+
+// Affiche l'overlay d'erreur et grise le dernier rendu valide (s'il y en a un).
+function showDecodeError() {
+  if (lastValidRender) {
+    imageCanvas.classList.add('degraded');
+  } else {
+    imageCanvas.classList.remove('visible');
+    imagePlaceholder.classList.remove('hidden');
+  }
+  imageError.classList.remove('hidden');
+}
+
+// Schedule un re-rendu debouncé. À utiliser après chaque modification du buffer.
+function scheduleRender() {
+  if (renderTimer) clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => {
+    renderTimer = null;
+    renderImage(state.buffer);
+  }, RENDER_DEBOUNCE_MS);
+}
+
+// ============================================================
+// Panneau Structure (cf. SPECS §5)
+// ============================================================
+
+// Détermine la couleur de pastille selon le type de segment.
+function segDotClass(type) {
+  if (type === 'SCAN') return 'scan';
+  if (type.startsWith('RST')) return 'rst';
+  if (type === 'EOI') return 'eoi';
+  return 'header';
+}
+
+// Construit la chaîne d'info synthétique affichée sur une ligne de segment.
+function buildSegSummary(seg) {
+  const info = seg.info;
+  if (!info) {
+    if (seg.type === 'SCAN') {
+      const n = (seg.rstMarkers && seg.rstMarkers.length) || 0;
+      return n ? `${n} RST markers` : '';
+    }
+    return '';
+  }
+  if (seg.type === 'APP0') return `${info.identifier || ''} ${info.version || ''}`.trim();
+  if (seg.type === 'APP1') return info.identifier || '';
+  if (seg.type === 'DQT')  return `table ${info.tableId} · ${info.precision === 0 ? '8b' : '16b'}`;
+  if (seg.type === 'DHT')  return `${info.tableClass === 0 ? 'DC' : 'AC'} ${info.tableId} · ${info.totalCodes} codes`;
+  if (seg.type.startsWith('SOF')) {
+    return `${info.width}×${info.height} · ${info.components.length} comp.`;
+  }
+  if (seg.type === 'DRI') return `interval ${info.restartInterval}`;
+  if (seg.type === 'SOS') return `${(info.components || []).length} comp.`;
+  return '';
+}
+
+// Rendu de la heatmap 8×8 d'une matrice DQT.
+// Couleur : interpolation rouge→vert selon la valeur normalisée (0..max).
+function renderDqtHeatmap(matrix) {
+  if (!matrix) return '';
+  let max = 1;
+  for (let i = 0; i < 64; i++) if (matrix[i] > max) max = matrix[i];
+  const cells = [];
+  for (let i = 0; i < 64; i++) {
+    const v = matrix[i];
+    const t = v / max; // 0..1
+    // t=0 → vert (faible quant. = haute qualité), t=1 → rouge
+    const r = Math.round(60 + 180 * t);
+    const g = Math.round(180 - 140 * t);
+    const b = 60;
+    cells.push(
+      `<div class="dqt-cell" style="background:rgb(${r},${g},${b})" title="${v}">${v}</div>`
+    );
+  }
+  return `<div class="dqt-matrix">${cells.join('')}</div>`;
+}
+
+// Rendu d'un histogramme 16 barres pour les longueurs de codes DHT.
+function renderDhtBars(codeCounts) {
+  if (!codeCounts) return '';
+  let max = 1;
+  for (const n of codeCounts) if (n > max) max = n;
+  const bars = codeCounts.map((n, i) => {
+    const h = max > 0 ? Math.round((n / max) * 100) : 0;
+    return `<div class="dht-bar" style="height:${h}%" title="longueur ${i + 1} : ${n} codes">
+      <span class="dht-bar-label">${i + 1}</span>
+    </div>`;
+  });
+  return `<div class="dht-bars">${bars.join('')}</div>`;
+}
+
+// Rendu des détails dépliés sous certaines lignes (DQT, DHT, SOF, SCAN).
+function renderSegDetails(seg) {
+  const info = seg.info;
+  if (seg.type === 'DQT' && info) {
+    return `<div class="seg-details">
+      <strong>Table ${info.tableId}</strong> · précision ${info.precision === 0 ? '8 bits' : '16 bits'}
+      ${renderDqtHeatmap(info.matrix)}
+    </div>`;
+  }
+  if (seg.type === 'DHT' && info) {
+    return `<div class="seg-details">
+      <strong>${info.tableClass === 0 ? 'DC' : 'AC'} table ${info.tableId}</strong>
+      · ${info.totalCodes} codes au total
+      ${renderDhtBars(info.codeCounts)}
+    </div>`;
+  }
+  if (seg.type.startsWith('SOF') && info) {
+    const comps = info.components.map(c =>
+      `comp #${c.id} · sampling ${c.h}×${c.v} · qtId ${c.qtId}`
+    ).join('<br>');
+    return `<div class="seg-details">
+      <strong>${info.width}×${info.height}</strong> px · précision ${info.precision} bits<br>
+      Subsampling : <strong>${state.parsed.subsampling}</strong>
+      · MCU ${state.parsed.mcuWidth}×${state.parsed.mcuHeight}<br>
+      ${comps}
+    </div>`;
+  }
+  if (seg.type === 'SCAN') {
+    const rst = seg.rstMarkers || [];
+    if (rst.length === 0) {
+      return `<div class="seg-details">
+        Scan data brut · ${seg.length.toLocaleString('fr-FR')} octets
+        · aucun RST marker
+      </div>`;
+    }
+    const entries = rst.slice(0, 256).map(r =>
+      `<span class="rst-entry"><span class="rst-idx">RST${r.index}</span> @0x${formatOffset(r.offset)}</span>`
+    ).join('');
+    const more = rst.length > 256 ? `<div>… et ${rst.length - 256} de plus</div>` : '';
+    return `<div class="seg-details">
+      <strong>${rst.length}</strong> RST markers · scan length ${seg.length.toLocaleString('fr-FR')} octets
+      <div class="rst-list">${entries}${more}</div>
+    </div>`;
+  }
+  return '';
+}
+
+// Rendu complet du panneau Structure à partir de l'objet parsed.
+function renderStructurePanel(parsed) {
+  if (!parsed || !parsed.segments || parsed.segments.length === 0) {
+    structureTree.innerHTML = '<div style="color: var(--text2); font-size: 11px;">Aucun segment parsé.</div>';
+    return;
+  }
+  // Avertissement SOF2 / progressif
+  if (parsed.isProgressive) {
+    sof2Warning.classList.remove('hidden');
+  } else {
+    sof2Warning.classList.add('hidden');
+  }
+
+  const items = parsed.segments.map(seg => {
+    const dot = segDotClass(seg.type);
+    const summary = buildSegSummary(seg);
+    const details = renderSegDetails(seg);
+    return `<div>
+      <div class="seg-item" data-offset="${seg.offset}" data-type="${seg.type}">
+        <span class="seg-dot ${dot}"></span>
+        <span class="seg-type">${seg.type}</span>
+        <span class="seg-offset">0x${formatOffset(seg.offset)}</span>
+        <span class="seg-length">${seg.length.toLocaleString('fr-FR')} o</span>
+        <span class="seg-info">${summary}</span>
+        <button class="seg-jump" data-offset="${seg.offset}" title="Aller à cet offset dans le hex viewer">↗</button>
+      </div>
+      ${details}
+    </div>`;
+  });
+  structureTree.innerHTML = `<div class="seg-list">${items.join('')}</div>`;
+
+  // Bindings : clic sur la ligne ou sur le bouton « ↗ » → scroll vers l'offset
+  structureTree.querySelectorAll('.seg-item').forEach(el => {
+    el.addEventListener('click', (e) => {
+      // Le clic sur le bouton interne est géré séparément ci-dessous (stopPropagation)
+      const off = parseInt(el.dataset.offset, 10);
+      if (Number.isFinite(off)) scrollHexToOffset(off);
+    });
+  });
+  structureTree.querySelectorAll('.seg-jump').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const off = parseInt(btn.dataset.offset, 10);
+      if (Number.isFinite(off)) scrollHexToOffset(off);
+    });
+  });
+  // Phase 5 : enrichit les segments avec des tooltips contextuels
+  if (typeof enrichSegmentTooltips === 'function') enrichSegmentTooltips();
+}
+
+// Scrolle vers l'offset seulement si la plage [start, end] n'est pas
+// entièrement visible dans le viewport du hex viewer.
+// Évite les scrolls parasites lorsque la zone est déjà à l'écran.
+function scrollHexToOffsetIfNeeded(start, end) {
+  if (!HEX.scrollEl) return;
+  const scrollEl = HEX.scrollEl;
+
+  // Lignes correspondant aux bornes de la plage
+  const lineStart = Math.floor(start / HEX_BYTES_PER_LINE);
+  const lineEnd   = Math.floor(end   / HEX_BYTES_PER_LINE);
+
+  // Lignes actuellement visibles dans le conteneur scrollable
+  const firstVisible = Math.floor(scrollEl.scrollTop / HEX.lineHeight);
+  const lastVisible  = Math.floor((scrollEl.scrollTop + scrollEl.clientHeight) / HEX.lineHeight);
+
+  // Si la plage est entièrement visible, on ne scrolle pas
+  if (lineStart >= firstVisible && lineEnd <= lastVisible) return;
+
+  // Sinon, on scrolle pour amener lineStart en haut du viewport
+  scrollHexToOffset(start);
+}
+
+// Scroll du hex viewer virtualisé à un offset donné (cf. SPECS §6.1).
+// La ligne cible est amenée près du centre du viewport, et un highlight
+// temporaire (.hex-line-highlight) s'efface après ~1 seconde.
+function scrollHexToOffset(offset) {
+  if (offset < 0 || !HEX.scrollEl) return;
+  const lineIndex = Math.floor(offset / HEX_BYTES_PER_LINE);
+  const targetTop = lineIndex * HEX.lineHeight;
+  // Centre la ligne dans le viewport quand c'est possible
+  const viewH = HEX.scrollEl.clientHeight || 0;
+  HEX.scrollEl.scrollTop = Math.max(0, targetTop - viewH / 2 + HEX.lineHeight / 2);
+  // Force un onHexScroll synchrone pour que la ligne soit dans le pool
+  onHexScroll();
+  // Trouve la ligne (peut nécessiter un raf le temps que le scroll s'applique)
+  requestAnimationFrame(() => {
+    for (const el of HEX.pool) {
+      if (el.dataset.line === String(lineIndex)) {
+        el.classList.add('hex-line-highlight');
+        setTimeout(() => el.classList.remove('hex-line-highlight'), 900);
+        break;
+      }
+    }
+  });
+}
+
+// ============================================================
+// Mapping octets ↔ pixels — Mode C Huffman exact uniquement (cf. SPECS §4.3, §6.4)
+// ============================================================
+
+// Mode C uniquement — délègue directement à mcuToByteRangeC.
+function mcuToByteRange(mcuIndex) { return mcuToByteRangeC(mcuIndex); }
+
+// ============================================================
+// Mode C — Huffman exact (cf. SPECS §4.3, §6.5)
+// Décodage réel du bitstream Huffman dans un Web Worker.
+// Les offsets exacts de début de chaque MCU sont mémorisés dans mcuOffsets[].
+// ============================================================
+
+// Variables d'état Mode C — déclarées avant les fonctions qui les utilisent.
+// Tableau des offsets de début de chaque MCU, calculé par le Web Worker.
+// null = pas encore calculé ou invalidé par une modification du scan data.
+let mcuOffsets = null;
+// Instance du Web Worker actif pour le décodage Huffman, null si aucun en cours.
+let huffmanWorker = null;
+// URL du Blob du worker, révoquée après la fin du décodage pour éviter les fuites mémoire.
+let huffmanWorkerUrl = null;
+
+// Code source du Web Worker inline (Blob URL, pas de fichier séparé).
+// Le worker reçoit le buffer + les tables DHT/SOS et retourne mcuOffsets[].
+const HUFFMAN_WORKER_SRC = `
+'use strict';
+let cancelled = false;
+
+// Construit la table de décodage Huffman canonique depuis codeCounts et values.
+// Retourne { table, values } où table[l-1] = { minCode, maxCode, offset, length, count }.
+// L'algorithme suit la construction canonique JPEG (ISO 10918-1 Annexe C).
+function buildDecodeTable(codeCounts, values) {
+  const table = [];
+  let code = 0;
+  let valIdx = 0;
+  for (let l = 1; l <= 16; l++) {
+    const count = codeCounts[l - 1];
+    table.push({ minCode: code, maxCode: code + count - 1, offset: valIdx, length: l, count });
+    valIdx += count;
+    code = (code + count) << 1;
+  }
+  return { table, values };
+}
+
+// Décode un symbole Huffman depuis le lecteur de bits.
+// Lance une erreur si aucun code valide trouvé après 16 bits.
+function decodeSymbol(reader, huff) {
+  let code = 0;
+  for (let l = 1; l <= 16; l++) {
+    code = (code << 1) | reader.readBit();
+    const entry = huff.table[l - 1];
+    if (entry.count === 0) continue;
+    if (code >= entry.minCode && code <= entry.maxCode) {
+      return huff.values[entry.offset + (code - entry.minCode)];
+    }
+  }
+  throw new Error('Code Huffman invalide');
+}
+
+// Étend un coefficient DCT signé depuis sa magnitude (JPEG Annexe F.2.2.1).
+function extend(v, t) {
+  if (t === 0) return 0;
+  const vt = 1 << (t - 1);
+  return v < vt ? v - (vt << 1) + 1 : v;
+}
+
+// Lecteur de bits avec byte unstuffing JPEG (FF 00 → FF).
+// Paramètre startByte : position d'octet de départ dans data.
+// Le tampon interne (bitBuf) est traité comme un entier non signé via l'opérateur
+// >>> pour éviter les problèmes de signe JavaScript sur les shifts 32 bits.
+function makeBitReader(data, startByte) {
+  let bytePos = startByte;
+  // On utilise deux mots de 16 bits pour éviter le débordement signé de bitBuf << 8
+  // quand bitsLeft atteint 32 (le bit 31 deviendrait le bit de signe).
+  // Solution : tampon de 32 bits max, mais on ne charge que quand bitsLeft <= 23
+  // pour s'assurer qu'un octet de plus ne dépasse pas 31 bits.
+  let bitBuf = 0;   // Tampon 32 bits (utilisé via >>> pour rester non signé)
+  let bitsLeft = 0; // Nombre de bits valides dans bitBuf (0..31)
+
+  // Remplit le tampon de bits depuis le flux d'octets (byte unstuffing inclus).
+  function fillBuf() {
+    // On charge seulement quand il reste de la place pour un octet entier (max 23 bits)
+    // afin que (bitBuf << 8) ne déborde pas sur le bit de signe.
+    while (bitsLeft <= 23 && bytePos < data.length) {
+      let b = data[bytePos++];
+      if (b === 0xFF) {
+        const next = data[bytePos];
+        if (next === 0x00) {
+          bytePos++; // Byte stuffing : FF 00 → FF dans le bitstream
+        } else if (next >= 0xD0 && next <= 0xD7) {
+          // Marqueur RST rencontré dans le bitstream — signaler pour traitement externe.
+          // bytePos - 1 pointe sur le 0xFF du marqueur RST.
+          throw { type: 'rst', bytePos: bytePos - 1 };
+        } else if (next === 0xD9) {
+          // Marqueur EOI — fin de scan
+          return;
+        }
+      }
+      bitBuf = ((bitBuf << 8) | b) >>> 0; // >>> 0 maintient la valeur non signée
+      bitsLeft += 8;
+    }
+  }
+
+  return {
+    readBit() {
+      if (bitsLeft === 0) fillBuf();
+      if (bitsLeft === 0) return 0;
+      bitsLeft--;
+      return (bitBuf >>> bitsLeft) & 1;
+    },
+    readBits(n) {
+      if (n === 0) return 0;
+      if (bitsLeft < n) fillBuf();
+      bitsLeft -= n;
+      return (bitBuf >>> bitsLeft) & ((1 << n) - 1);
+    },
+    get bytePos() { return bytePos; },
+    get bitsLeft() { return bitsLeft; },
+  };
+}
+
+// Décode un bloc DCT (1 DC + jusqu'à 63 AC).
+// Met à jour dcPred (prédiction DC différentielle inter-blocs).
+// Retourne le nouveau dcPred.
+function decodeBlock(reader, dcHuff, acHuff, dcPred) {
+  // Coefficient DC : magnitude + valeur signée
+  const dcSize = decodeSymbol(reader, dcHuff);
+  const dcDiff = dcSize > 0 ? extend(reader.readBits(dcSize), dcSize) : 0;
+  const newDcPred = dcPred + dcDiff;
+
+  // Coefficients AC : RLE de (run, size) pairs, EOB = (0,0), ZRL = (15,0)
+  let k = 1;
+  while (k < 64) {
+    const acByte = decodeSymbol(reader, acHuff);
+    const run = (acByte >> 4) & 0x0F;
+    const size = acByte & 0x0F;
+    if (run === 0 && size === 0) break;   // EOB : fin du bloc
+    if (run === 15 && size === 0) { k += 16; continue; } // ZRL : 16 zéros
+    k += run + 1;
+    if (size > 0) reader.readBits(size);
+  }
+  return newDcPred;
+}
+
+self.onmessage = function(e) {
+  const msg = e.data;
+  if (msg.type === 'cancel') { cancelled = true; return; }
+  if (msg.type !== 'decode') return;
+
+  try {
+    const { buffer, dhtTables, sosComponents, subsampling, scanOffset, scanLength,
+            mcuCount, rstMarkers, restartInterval } = msg;
+    const data = new Uint8Array(buffer);
+
+    // Construire les tables Huffman indexées par [tableClass][tableId]
+    const huffTables = { 0: {}, 1: {} };
+    for (const t of dhtTables) {
+      huffTables[t.tableClass][t.tableId] = buildDecodeTable(t.codeCounts, t.values);
+    }
+
+    // Déterminer le nombre de blocs DCT par MCU selon le subsampling
+    // 4:2:0 : Y×4 + Cb×1 + Cr×1 = 6 blocs ; 4:2:2 : Y×2 + Cb + Cr = 4 ; 4:4:4 : 3
+    function getBlocksForMcu() {
+      const blocks = [];
+      for (const comp of sosComponents) {
+        const dcT = huffTables[0][comp.dcId];
+        const acT = huffTables[1][comp.acId];
+        let count = 1;
+        if (subsampling === '4:2:0' && comp === sosComponents[0]) count = 4;
+        else if (subsampling === '4:2:2' && comp === sosComponents[0]) count = 2;
+        for (let b = 0; b < count; b++) {
+          blocks.push({ dcT, acT, compIdx: sosComponents.indexOf(comp) });
+        }
+      }
+      return blocks;
+    }
+    const mcuBlocks = getBlocksForMcu();
+
+    // Trier les marqueurs RST par offset croissant pour traitement séquentiel
+    const sortedRst = (rstMarkers || []).slice().sort((a, b) => a.offset - b.offset);
+
+    const mcuOffsets = [];
+    const dcPreds = sosComponents.map(() => 0);
+    // Envoyer la progression tous les ~0.5% (200 rapports max)
+    const reportEvery = Math.max(1, Math.floor(mcuCount / 200));
+
+    // Créer UN SEUL reader pour tout le scan — critique car le bitstream JPEG
+    // n'est pas aligné sur les octets entre MCUs. Recréer le reader à chaque MCU
+    // ferait perdre les bits fractionnaires encore dans le tampon interne.
+    let reader = makeBitReader(data, scanOffset);
+
+    for (let mcuIdx = 0; mcuIdx < mcuCount; mcuIdx++) {
+      if (cancelled) return;
+
+      // Sauter les marqueurs RST entre MCUs (réinitialisation du prédicteur DC).
+      // Le reader est recréé après chaque RST pour repartir d'un octet propre.
+      // On vérifie la position *octets déjà lus* du reader (bytePos - octets en tampon).
+      const currentBytePos = reader.bytePos - Math.floor(reader.bitsLeft / 8);
+      while (sortedRst.length > 0 && currentBytePos >= sortedRst[0].offset) {
+        // Le marqueur RST est FF Dx (2 octets) — on redémarre après lui
+        const rstEnd = sortedRst[0].offset + 2;
+        sortedRst.shift();
+        for (let i = 0; i < dcPreds.length; i++) dcPreds[i] = 0;
+        // Recréer le reader depuis la position après le marqueur RST
+        // (le RST marque une frontière d'alignement octet dans le bitstream)
+        reader = makeBitReader(data, rstEnd);
+      }
+
+      // Enregistrer la position byte de début de ce MCU.
+      // bytePos désigne le prochain octet à lire ; on corrige par les bits
+      // déjà chargés en tampon pour obtenir la position réelle dans le flux.
+      const mcuByteOffset = reader.bytePos - Math.floor(reader.bitsLeft / 8);
+      mcuOffsets.push({ byteOffset: mcuByteOffset, bitOffset: reader.bitsLeft % 8 });
+
+      // Décoder tous les blocs du MCU avec le reader partagé
+      try {
+        for (const block of mcuBlocks) {
+          const compIdx = block.compIdx;
+          dcPreds[compIdx] = decodeBlock(reader, block.dcT, block.acT, dcPreds[compIdx]);
+        }
+      } catch (ex) {
+        if (ex && ex.type === 'rst') {
+          // RST marker rencontré en plein décodage — ex.bytePos pointe sur le FF du marqueur.
+          // On saute les 2 octets FF Dx et on recrée le reader pour ré-aligner sur l'octet.
+          const rstEnd = ex.bytePos + 2;
+          for (let i = 0; i < dcPreds.length; i++) dcPreds[i] = 0;
+          // Supprimer ce marqueur de sortedRst s'il n'a pas encore été consommé
+          while (sortedRst.length > 0 && sortedRst[0].offset <= ex.bytePos) sortedRst.shift();
+          reader = makeBitReader(data, rstEnd);
+        } else {
+          // Erreur de décodage irréparable — retourner les offsets calculés jusqu'ici
+          postMessage({ type: 'error', message: 'Erreur décodage MCU ' + mcuIdx + ': ' + (ex.message || ex) });
+          postMessage({ type: 'result', mcuOffsets }, [buffer]);
+          return;
+        }
+      }
+
+      if (mcuIdx % reportEvery === 0) {
+        postMessage({ type: 'progress', percent: Math.round(mcuIdx / mcuCount * 100) });
+      }
+    }
+
+    postMessage({ type: 'progress', percent: 100 });
+    // Transférer le buffer (évite une copie coûteuse) — il sera inutilisable ici après
+    postMessage({ type: 'result', mcuOffsets }, [buffer]);
+
+  } catch (err) {
+    postMessage({ type: 'error', message: err.message || String(err) });
+  }
+};
+`;
+
+// Lance le décodage Huffman complet dans un Web Worker (Mode C, §6.5).
+// Crée un Blob URL depuis HUFFMAN_WORKER_SRC pour éviter un fichier externe.
+function startHuffmanDecode() {
+  if (!state.parsed || !state.buffer) return;
+  console.log('[Mode C] startHuffmanDecode appelé, mcuCount=', state.parsed.mcuCount);
+  cancelHuffmanDecode();
+
+  // Collecter les tables DHT (avec valeurs symboliques extraites par parseDht)
+  const dhtTables = state.parsed.segments
+    .filter(s => s.type === 'DHT' && s.info)
+    .map(s => ({
+      tableClass: s.info.tableClass,
+      tableId: s.info.tableId,
+      codeCounts: s.info.codeCounts,
+      values: s.info.values || [],
+    }));
+
+  // Composants SOS : identifiants des tables DC/AC par composant
+  const sosSeg = state.parsed.segments.find(s => s.type === 'SOS');
+  const sosComponents = (sosSeg && sosSeg.info && sosSeg.info.components) || [];
+
+  // Marqueurs RST dans le scan data (pour réinitialiser les prédicteurs DC)
+  const scanSeg = state.parsed.segments.find(s => s.type === 'SCAN');
+  const rstMarkers = (scanSeg && scanSeg.rstMarkers) || [];
+
+  // Copier le buffer sans transférer l'original (on en a encore besoin dans le thread principal)
+  const bufferCopy = state.buffer.buffer.slice(0);
+
+  // Créer le worker depuis un Blob inline
+  const blob = new Blob([HUFFMAN_WORKER_SRC], { type: 'application/javascript' });
+  huffmanWorkerUrl = URL.createObjectURL(blob);
+  // Capturer l'URL localement pour éviter les problèmes de closure si cancelHuffmanDecode
+  // est appelé depuis onerror/onmessage (huffmanWorkerUrl serait déjà null)
+  const workerUrl = huffmanWorkerUrl;
+  huffmanWorker = new Worker(workerUrl);
+
+  // Afficher la barre de progression
+  const bar = document.getElementById('huffman-bar');
+  if (bar) bar.style.display = 'flex';
+  const prog = document.getElementById('huffman-progress');
+  const status = document.getElementById('huffman-status');
+  if (prog) prog.value = 0;
+  if (status) status.textContent = '0%';
+
+  // Capture les erreurs silencieuses du worker (erreurs de syntaxe, exceptions non catchées)
+  huffmanWorker.onerror = function(e) {
+    console.error('[Mode C] Erreur fatale du worker :', e.message, e);
+    if (bar) bar.style.display = 'none';
+    if (status) status.textContent = 'Erreur worker';
+    URL.revokeObjectURL(workerUrl);
+    if (huffmanWorkerUrl === workerUrl) huffmanWorkerUrl = null;
+    huffmanWorker = null;
+    updateMappingNote();
+  };
+
+  huffmanWorker.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.type === 'progress') {
+      if (prog) prog.value = msg.percent;
+      if (status) status.textContent = msg.percent + '%';
+    } else if (msg.type === 'result') {
+      mcuOffsets = msg.mcuOffsets;
+      console.log('[Mode C] mcuOffsets reçus :', mcuOffsets.length, 'MCUs');
+      if (bar) bar.style.display = 'none';
+      URL.revokeObjectURL(workerUrl);
+      if (huffmanWorkerUrl === workerUrl) huffmanWorkerUrl = null;
+      huffmanWorker = null;
+      updateMappingNote();
+      // Si un MCU était verrouillé, re-sélectionner avec les offsets exacts
+      if (overlayLocked && lockedMcu >= 0) {
+        const range = mcuToByteRange(lockedMcu);
+        if (range) {
+          edit.selection = [{ start: range.start, end: range.end + 1 }];
+          if (typeof refreshSelectionInDom === 'function') refreshSelectionInDom();
+          if (typeof updateSelectionInfo === 'function') updateSelectionInfo();
+          clearOverlay();
+          drawLockedHighlight(lockedMcu);
+        }
+      }
+    } else if (msg.type === 'error') {
+      console.warn('[Mode C] Erreur de décodage Huffman :', msg.message);
+      if (bar) bar.style.display = 'none';
+      URL.revokeObjectURL(workerUrl);
+      if (huffmanWorkerUrl === workerUrl) huffmanWorkerUrl = null;
+      huffmanWorker = null;
+      if (status) status.textContent = 'Erreur';
+      updateMappingNote();
+    }
+  };
+
+  huffmanWorker.postMessage({
+    type: 'decode',
+    buffer: bufferCopy,
+    dhtTables,
+    sosComponents,
+    subsampling: state.parsed.subsampling,
+    scanOffset: state.parsed.scanOffset,
+    scanLength: state.parsed.scanLength,
+    mcuCount: state.parsed.mcuCount,
+    rstMarkers,
+    restartInterval: state.parsed.restartInterval,
+  }, [bufferCopy]);
+}
+
+// Annule le décodage Huffman en cours et cache la barre de progression.
+function cancelHuffmanDecode() {
+  if (huffmanWorker) {
+    huffmanWorker.postMessage({ type: 'cancel' });
+    huffmanWorker.terminate();
+    huffmanWorker = null;
+  }
+  if (huffmanWorkerUrl) {
+    URL.revokeObjectURL(huffmanWorkerUrl);
+    huffmanWorkerUrl = null;
+  }
+  const bar = document.getElementById('huffman-bar');
+  if (bar) bar.style.display = 'none';
+}
+
+// Mode C : index MCU → plage d'octets depuis les offsets Huffman exacts.
+// Retourne null pendant le décodage (mcuOffsets pas encore disponible).
+function mcuToByteRangeC(i) {
+  if (!mcuOffsets || mcuOffsets.length === 0) return null;
+  const start = mcuOffsets[i] ? mcuOffsets[i].byteOffset : null;
+  if (start === null) return null;
+  const end = (i + 1 < mcuOffsets.length)
+    ? mcuOffsets[i + 1].byteOffset - 1
+    : state.parsed.scanOffset + state.parsed.scanLength - 1;
+  return { start, end };
+}
+
+// Mode C : offset d'octet → index MCU par recherche binaire dans mcuOffsets.
+// Retourne -1 pendant le décodage (mcuOffsets pas encore disponible).
+function offsetToMcuC(offset) {
+  if (!mcuOffsets || mcuOffsets.length === 0) return -1;
+  const p = state.parsed;
+  if (offset < p.scanOffset || offset >= p.scanOffset + p.scanLength) return -1;
+  // Recherche binaire : trouver le plus grand i tel que mcuOffsets[i].byteOffset <= offset
+  let lo = 0, hi = mcuOffsets.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (mcuOffsets[mid].byteOffset <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+// Index MCU → rectangle pixel (coord. canvas natives). cf. SPECS §6.4.
+function mcuToPixel(index) {
+  if (!state.parsed) return { x: 0, y: 0, w: 0, h: 0 };
+  const { mcuCountX, mcuWidth, mcuHeight, width, height } = state.parsed;
+  if (mcuCountX <= 0) return { x: 0, y: 0, w: 0, h: 0 };
+  const my = Math.floor(index / mcuCountX);
+  const mx = index % mcuCountX;
+  return {
+    x: mx * mcuWidth,
+    y: my * mcuHeight,
+    w: Math.min(mcuWidth,  width  - mx * mcuWidth),
+    h: Math.min(mcuHeight, height - my * mcuHeight),
+  };
+}
+
+// Coordonnées pixel (canvas natif) → index MCU.
+function pixelToMcu(px, py) {
+  if (!state.parsed) return -1;
+  const { mcuCountX, mcuCountY, mcuWidth, mcuHeight } = state.parsed;
+  if (mcuCountX <= 0 || mcuCountY <= 0) return -1;
+  const mx = Math.max(0, Math.min(mcuCountX - 1, Math.floor(px / mcuWidth)));
+  const my = Math.max(0, Math.min(mcuCountY - 1, Math.floor(py / mcuHeight)));
+  return my * mcuCountX + mx;
+}
+
+// ============================================================
+// Canvas overlay pour highlights MCU (cf. SPECS §4.4)
+// ============================================================
+
+// État de verrouillage du highlight MCU (clic sur le canvas image).
+// Quand true, le survol et le mouseleave n'effacent plus le highlight.
+let overlayLocked = false;
+// Index du MCU actuellement verrouillé (-1 = aucun verrouillage actif).
+let lockedMcu = -1;
+// Offset exact de l'octet sur lequel l'utilisateur a cliqué dans le hex viewer (-1 = aucun).
+let clickCursorOffset = -1;
+
+// Synchronise les dimensions du canvas overlay avec #image-canvas
+// (à appeler après chaque renderImage onload).
+function syncOverlay() {
+  const ic = $('image-canvas');
+  const ov = $('overlay-canvas');
+  if (!ic || !ov) return;
+  ov.width  = ic.width;
+  ov.height = ic.height;
+  // Reproduit la mise à l'échelle CSS de l'image (max-width/max-height)
+  const rect = ic.getBoundingClientRect();
+  ov.style.width  = rect.width  + 'px';
+  ov.style.height = rect.height + 'px';
+}
+
+// Dessine un rectangle de surbrillance pour la MCU d'index donné.
+function drawMcuHighlight(mcuIndex, color, alpha) {
+  const ov = $('overlay-canvas');
+  if (!ov || !state.parsed || mcuIndex < 0) return;
+  if (state.parsed.mcuCount <= 0) return;
+  const r = mcuToPixel(mcuIndex);
+  if (r.w <= 0 || r.h <= 0) return;
+  const ctx = ov.getContext('2d');
+  ctx.save();
+  ctx.globalAlpha = (alpha == null) ? 0.35 : alpha;
+  ctx.fillStyle = color || '#e8b86d';
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
+}
+
+function clearOverlay() {
+  const ov = $('overlay-canvas');
+  if (!ov) return;
+  ov.getContext('2d').clearRect(0, 0, ov.width, ov.height);
+}
+
+// Déplace le marqueur de clic vers l'offset donné (-1 = efface le marqueur).
+// Retire la classe de tous les éléments qui la portent, puis l'applique
+// aux deux éléments (hex + ascii) correspondant au nouvel offset.
+function setClickCursor(offset) {
+  // Retire le marqueur des éléments DOM actuellement marqués
+  document.querySelectorAll('.hex-cursor-click').forEach(el => {
+    el.classList.remove('hex-cursor-click');
+  });
+  clickCursorOffset = offset;
+  if (offset < 0) return;
+  // Applique le marqueur sur les deux cellules (hex-byte + hex-ascii-char) de cet offset
+  document.querySelectorAll(`[data-offset="${offset}"]`).forEach(el => {
+    el.classList.add('hex-cursor-click');
+  });
+}
+
+// Dessine le highlight MCU verrouillé : même fond que drawMcuHighlight
+// mais avec un contour strokeRect jaune (--accent) de 2px pour indiquer
+// visuellement l'état figé.
+function drawLockedHighlight(mcuIndex) {
+  const ov = $('overlay-canvas');
+  if (!ov || !state.parsed || mcuIndex < 0) return;
+  if (state.parsed.mcuCount <= 0) return;
+  const r = mcuToPixel(mcuIndex);
+  if (r.w <= 0 || r.h <= 0) return;
+  const ctx = ov.getContext('2d');
+  ctx.save();
+  // Fond semi-transparent (même couleur bleue que le survol)
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = '#6d9be8';
+  ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Contour jaune plein pour signaler le verrouillage
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = '#e8b86d';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+  ctx.restore();
+}
+
+// ============================================================
+// Highlight bidirectionnel hex ↔ image (cf. SPECS §4.4)
+// ============================================================
+
+const byteTooltipEl = () => $('byte-tooltip');
+
+function showByteTooltip(offset, event) {
+  const tip = byteTooltipEl();
+  if (!tip || !state.parsed) return;
+  // Cherche le segment auquel appartient cet offset
+  let label = 'octet @ 0x' + formatOffset(offset);
+  const seg = state.parsed.segments.find(
+    s => offset >= s.offset && offset < s.offset + s.length
+  );
+  if (seg) {
+    label = seg.type + ' · 0x' + formatOffset(offset);
+    if (seg.info) {
+      // Sérialisation courte des infos pertinentes
+      let extra = '';
+      if (seg.type === 'APP0' && seg.info.identifier) {
+        extra = seg.info.identifier + ' ' + (seg.info.version || '');
+      } else if (seg.type === 'APP1' && seg.info.identifier) {
+        extra = seg.info.identifier;
+      } else if (seg.type === 'DQT') {
+        extra = 'table ' + seg.info.tableId;
+      } else if (seg.type === 'DHT') {
+        extra = (seg.info.tableClass === 0 ? 'DC' : 'AC') + ' ' + seg.info.tableId;
+      } else if (seg.type.startsWith('SOF') && seg.info.width) {
+        extra = seg.info.width + '×' + seg.info.height;
+      } else if (seg.type === 'DRI') {
+        extra = 'interval ' + seg.info.restartInterval;
+      }
+      if (extra) label += ' — ' + extra;
+    }
+  }
+  tip.textContent = label;
+  tip.classList.remove('hidden');
+  // Position près du curseur (sans déborder du viewport)
+  const x = Math.min(window.innerWidth - 200, (event.clientX || 0) + 12);
+  const y = Math.min(window.innerHeight - 30, (event.clientY || 0) + 16);
+  tip.style.left = x + 'px';
+  tip.style.top  = y + 'px';
+}
+
+function hideTooltip() {
+  const tip = byteTooltipEl();
+  if (tip) tip.classList.add('hidden');
+}
+
+// Délégation : survol d'un octet dans le hex viewer → highlight MCU
+function onHexByteMouseenter(e) {
+  // Highlight verrouillé — on ne touche pas à l'overlay.
+  if (overlayLocked) return;
+  const target = e.target;
+  if (!target || !target.classList) return;
+  if (!target.classList.contains('hex-byte') &&
+      !target.classList.contains('hex-ascii-char')) return;
+  const off = parseInt(target.dataset.offset, 10);
+  if (!Number.isFinite(off)) return;
+  target.classList.add('byte-hover');
+  clearOverlay();
+  // Utilise offsetToMcuC — retourne -1 pendant le décodage (mcuOffsets null)
+  const mcu = offsetToMcuC(off);
+  if (mcu >= 0) {
+    drawMcuHighlight(mcu, '#e8b86d', 0.35);
+    hideTooltip();
+  } else {
+    showByteTooltip(off, e);
+  }
+}
+
+function onHexByteMouseleave(e) {
+  // Highlight verrouillé — on ne touche pas à l'overlay.
+  if (overlayLocked) return;
+  const target = e.target;
+  if (target && target.classList) target.classList.remove('byte-hover');
+  clearOverlay();
+  hideTooltip();
+}
+
+// Délégation : survol du canvas image → trouve la MCU et scrolle le hex viewer.
+// Ne fait rien si le highlight est verrouillé (overlayLocked === true).
+let canvasHoverTimer = null;
+function onCanvasMousemove(e) {
+  if (overlayLocked) return; // highlight figé — on ignore le survol
+  if (!state.parsed) return;
+  const ic = $('image-canvas');
+  if (!ic || ic.width === 0) return;
+  const rect = ic.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const scaleX = ic.width  / rect.width;
+  const scaleY = ic.height / rect.height;
+  const px = (e.clientX - rect.left) * scaleX;
+  const py = (e.clientY - rect.top)  * scaleY;
+  const mcu = pixelToMcu(px, py);
+  if (mcu < 0) return;
+
+  clearOverlay();
+  drawMcuHighlight(mcu, '#6d9be8', 0.35);
+
+  // Scroll le hex viewer vers l'offset approximatif (debounce léger)
+  if (canvasHoverTimer) clearTimeout(canvasHoverTimer);
+  canvasHoverTimer = setTimeout(() => {
+    const { scanOffset, scanLength, mcuCount } = state.parsed;
+    if (mcuCount > 0 && scanLength > 0) {
+      const approxOffset = scanOffset + Math.floor((mcu / mcuCount) * scanLength);
+      scrollHexToOffset(approxOffset);
+    }
+  }, 60);
+}
+
+// Efface le highlight au départ de la souris, sauf si le mode verrouillé est actif.
+function onCanvasMouseleave() {
+  if (overlayLocked) return; // highlight figé — on conserve l'affichage
+  clearOverlay();
+}
+
+// ============================================================
+// Bindings phase 3 (hex hover + canvas hover + verrouillage MCU)
+// ============================================================
+function setupPhase3Bindings() {
+  // Délégation sur le conteneur scrollable (couvre tous les octets virtualisés).
+  // Note : on n'attache PAS mouseover ici — il est attaché en phase 4 après que
+  // onHexByteMouseenter a été remplacé par la version qui supporte le mode B.
+  // Attacher les deux provoquerait un double clearOverlay() + drawMcuHighlight()
+  // à chaque survol (cf. §4.3 — problème corrigé).
+  const scroll = $('hex-scroll');
+  if (scroll) {
+    scroll.addEventListener('mouseout', onHexByteMouseleave);
+  }
+  const ic = $('image-canvas');
+  if (ic) {
+    ic.addEventListener('mousemove',  onCanvasMousemove);
+    ic.addEventListener('mouseleave', onCanvasMouseleave);
+
+    // Verrouillage du highlight MCU au clic gauche.
+    // - Clic sur un MCU non verrouillé → lock sur ce MCU.
+    // - Clic sur le même MCU déjà verrouillé → ne rien faire.
+    // - Clic sur un MCU différent quand un autre est verrouillé → switch vers le nouveau MCU.
+    // - Clic hors scan data (MCU = -1) quand verrouillé → déverrouille.
+    ic.addEventListener('click', (e) => {
+      if (!state.parsed) return;
+
+      // Calcule le MCU sous le curseur depuis les coordonnées pixel
+      const rect = ic.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const scaleX = ic.width  / rect.width;
+      const scaleY = ic.height / rect.height;
+      const px = (e.clientX - rect.left) * scaleX;
+      const py = (e.clientY - rect.top)  * scaleY;
+      const mcu = pixelToMcu(px, py);
+
+      // Hors scan data : délock si verrouillé, sinon comportement normal
+      if (mcu < 0) {
+        if (overlayLocked) resetOverlayLock();
+        return;
+      }
+
+      // Même MCU déjà verrouillé : aucune action (conserve le highlight)
+      if (overlayLocked && mcu === lockedMcu) return;
+
+      // Nouveau lock ou switch vers un autre MCU
+      const range = mcuToByteRange(mcu);
+      edit.selection = (range && range.start <= range.end)
+        ? [{ start: range.start, end: range.end + 1 }]
+        : [];
+      refreshSelectionInDom();
+      updateSelectionInfo && updateSelectionInfo();
+      clearOverlay();
+      drawLockedHighlight(mcu);
+      overlayLocked = true;
+      lockedMcu = mcu;
+      ic.style.cursor = 'pointer';
+
+      // [SPEC-4.3/4.4] Scrolle le hex viewer sur la plage de ce MCU
+      if (range && range.start <= range.end) {
+        scrollHexToOffsetIfNeeded(range.start, range.end);
+      } else {
+        // Fallback proportionnel si le calcul de plage échoue
+        const { scanOffset, scanLength, mcuCount } = state.parsed;
+        if (mcuCount > 0 && scanLength > 0) {
+          const approxOffset = scanOffset + Math.floor((mcu / mcuCount) * scanLength);
+          scrollHexToOffset(approxOffset);
+        }
+      }
+    });
+
+    // Curseur initial en mode survol
+    ic.style.cursor = 'crosshair';
+  }
+}
+
+// Réinitialise le verrouillage du highlight (appelé par resetToOriginal et onFileLoaded).
+// [SPEC-4.4] Vide aussi la sélection hex pour rester cohérent avec l'état de l'overlay.
+function resetOverlayLock() {
+  overlayLocked = false;
+  lockedMcu = -1;
+  const ic = $('image-canvas');
+  if (ic) ic.style.cursor = 'crosshair';
+  clearOverlay();
+  // Efface le marqueur de clic
+  setClickCursor(-1);
+  // Vide la sélection si elle a été établie par un verrouillage MCU
+  if (edit && edit.selection) {
+    edit.selection = [];
+    if (typeof refreshSelectionInDom === 'function') refreshSelectionInDom();
+    if (typeof updateSelectionInfo    === 'function') updateSelectionInfo();
+  }
+}
+
+// Avertissement générique au-dessus du hex viewer (réutilise la bannière existante).
+function showWarning(msg) {
+  hexWarning.textContent = msg;
+  hexWarning.classList.remove('hidden');
+}
+
+// ============================================================
+// Phase 4 — Édition + sélection + outils + Mapping B (cf. SPECS §4.3, §4.4, §4.5)
+// Toutes les mutations passent par recordAndApply() (cf. Phase 5)
+// pour être enregistrées dans l'historique undo/redo.
+// ============================================================
+const edit = {
+  cursor: -1,
+  halfNibble: '',
+  selection: [],     // [{start, end}] ranges, end exclusif
+  dragAnchor: -1,
+  dragging: false,
+  swapFirst: null,
+  mappingMode: 'C',
+  inAsciiMode: false, // true quand le curseur a été positionné via un clic sur .hex-ascii-char
+};
+
+const criticalWarning = $('critical-warning');
+const selectionInfo   = $('selection-info');
+const swapStatusEl    = $('swap-status');
+
+// ----- Helpers sélection ---------------------------------------------------
+
+function normalizeSelection(ranges) {
+  if (ranges.length === 0) return [];
+  const sorted = ranges.slice().sort((a, b) => a.start - b.start);
+  const out = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++) {
+    const top = out[out.length - 1];
+    const cur = sorted[i];
+    if (cur.start <= top.end) top.end = Math.max(top.end, cur.end);
+    else out.push(cur);
+  }
+  return out;
+}
+
+function* iterSelection() {
+  for (const r of edit.selection) {
+    for (let i = r.start; i < r.end; i++) yield i;
+  }
+}
+
+function selectionLength() {
+  let n = 0;
+  for (const r of edit.selection) n += (r.end - r.start);
+  return n;
+}
+
+function isOffsetSelected(offset) {
+  for (const r of edit.selection) {
+    if (offset >= r.start && offset < r.end) return true;
+  }
+  return false;
+}
+
+function clearSelection() {
+  edit.selection = [];
+  refreshSelectionInDom();
+  updateSelectionInfo();
+}
+
+function setSelectionRange(start, end) {
+  if (start > end) [start, end] = [end, start];
+  edit.selection = [{ start, end: end + 1 }];
+  refreshSelectionInDom();
+  updateSelectionInfo();
+}
+
+function addSelectionRange(start, end) {
+  if (start > end) [start, end] = [end, start];
+  edit.selection = normalizeSelection(edit.selection.concat([{ start, end: end + 1 }]));
+  refreshSelectionInDom();
+  updateSelectionInfo();
+}
+
+// Visite chaque .hex-byte/.hex-ascii-char actuellement dans le pool DOM
+// pour rafraîchir leur état (selected/cursor). Indispensable avec la
+// virtualisation : les éléments DOM sont recyclés à chaque scroll.
+function refreshSelectionInDom() {
+  if (!HEX.pool) return;
+  for (const line of HEX.pool) {
+    if (!line || line.style.display === 'none') continue;
+    const bytesSpan = line.children[1];
+    const asciiSpan = line.children[2];
+    if (!bytesSpan || !asciiSpan) continue;
+    for (let i = 0; i < HEX_BYTES_PER_LINE; i++) {
+      const byteEl  = bytesSpan.childNodes[i * 2];
+      const asciiEl = asciiSpan.childNodes[i];
+      if (!byteEl) continue;
+      const offStr = byteEl.dataset.offset;
+      if (offStr == null) {
+        byteEl.classList.remove('selected', 'cursor', 'editing');
+        if (asciiEl) asciiEl.classList.remove('selected', 'cursor');
+        continue;
+      }
+      const off = parseInt(offStr, 10);
+      const sel = isOffsetSelected(off);
+      byteEl.classList.toggle('selected', sel);
+      if (asciiEl) asciiEl.classList.toggle('selected', sel);
+      const isCur = (off === edit.cursor);
+      byteEl.classList.toggle('cursor', isCur);
+      if (asciiEl) asciiEl.classList.toggle('cursor', isCur);
+    }
+  }
+}
+
+function setCursor(offset) {
+  edit.cursor = offset;
+  edit.halfNibble = '';
+  refreshSelectionInDom();
+  if (offset >= 0) updateCriticalWarning(offset);
+  updateSelectionInfo();
+}
+
+function updateSelectionInfo() {
+  if (!selectionInfo) return;
+  const n = selectionLength();
+  if (n === 0) {
+    selectionInfo.innerHTML = edit.cursor >= 0
+      ? `Curseur : <strong>0x${formatOffset(edit.cursor)}</strong> (octet ${edit.cursor.toLocaleString('fr-FR')})`
+      : 'Aucune sélection.';
+  } else if (edit.selection.length === 1) {
+    const r = edit.selection[0];
+    selectionInfo.innerHTML =
+      `Sélection : <strong>${n.toLocaleString('fr-FR')}</strong> octets · ` +
+      `0x${formatOffset(r.start)} → 0x${formatOffset(r.end - 1)}`;
+  } else {
+    selectionInfo.innerHTML =
+      `Sélection multiple : <strong>${edit.selection.length}</strong> plages, ` +
+      `<strong>${n.toLocaleString('fr-FR')}</strong> octets`;
+  }
+}
+
+// Hook le rendu de ligne de Phase 3 pour rappliquer la sélection après recyclage
+const _origRenderLine = renderLine;
+renderLine = function (el, lineIndex) {
+  _origRenderLine(el, lineIndex);
+  // Applique les classes selection/cursor aux octets de cette ligne
+  const bytesSpan = el.children[1];
+  const asciiSpan = el.children[2];
+  if (!bytesSpan || !asciiSpan) return;
+  for (let i = 0; i < HEX_BYTES_PER_LINE; i++) {
+    const byteEl  = bytesSpan.childNodes[i * 2];
+    const asciiEl = asciiSpan.childNodes[i];
+    if (!byteEl) continue;
+    const offStr = byteEl.dataset.offset;
+    if (offStr == null) continue;
+    const off = parseInt(offStr, 10);
+    if (isOffsetSelected(off)) {
+      byteEl.classList.add('selected');
+      if (asciiEl) asciiEl.classList.add('selected');
+    }
+    if (off === edit.cursor) {
+      byteEl.classList.add('cursor');
+      if (asciiEl) asciiEl.classList.add('cursor');
+    }
+    // Rétablit le marqueur de clic après recyclage du nœud DOM par la virtualisation
+    if (off === clickCursorOffset) {
+      byteEl.classList.add('hex-cursor-click');
+      if (asciiEl) asciiEl.classList.add('hex-cursor-click');
+    }
+  }
+};
+
+// ----- Warnings d'édition critique (§4.5) ---------------------------------
+
+function findSegmentAt(offset) {
+  if (!state.parsed || !state.parsed.segments) return null;
+  for (const s of state.parsed.segments) {
+    if (offset >= s.offset && offset < s.offset + s.length) return s;
+  }
+  return null;
+}
+
+function updateCriticalWarning(offset) {
+  if (!criticalWarning) return;
+  const seg = findSegmentAt(offset);
+  if (!seg) { criticalWarning.classList.add('hidden'); return; }
+  if (seg.type === 'DQT' || seg.type === 'DHT' || seg.type.startsWith('SOF')) {
+    criticalWarning.textContent =
+      `⚠ En-tête critique (${seg.type}) — l'édition peut rendre l'image totalement indécodable.`;
+    criticalWarning.classList.remove('hidden');
+  } else {
+    criticalWarning.classList.add('hidden');
+  }
+}
+
+// Avertit si 0xFF est écrit dans le scan data sans byte stuffing (§2.1, §10).
+function checkByteStuffing(offset, value) {
+  if (!state.parsed || value !== 0xFF) return;
+  const scanStart = state.parsed.scanOffset;
+  const scanEnd   = scanStart + state.parsed.scanLength;
+  if (offset < scanStart || offset >= scanEnd) return;
+  const nextByte = state.buffer[offset + 1];
+  if (nextByte !== 0x00) {
+    showWarning(
+      `0xFF écrit à 0x${formatOffset(offset)} dans le scan data — ` +
+      `byte stuffing : le décodeur attend 0x00 juste après (sinon = marqueur).`
+    );
+  }
+}
+
+// ----- Mutations atomiques (via recordAndApply → historique) --------------
+
+function editByte(offset, value, opName = 'edit-byte') {
+  if (offset < 0 || offset >= state.buffer.length) return;
+  if (state.buffer[offset] === (value & 0xFF)) return;
+  const entry = makeDiffFromWrites(
+    [{ offset, value: value & 0xFF }],
+    opName,
+    { offset, value: value & 0xFF }
+  );
+  if (entry) recordAndApply(entry);
+  checkByteStuffing(offset, value & 0xFF);
+}
+
+function insertByte(offset, value) {
+  if (offset < 0 || offset > state.buffer.length) return;
+  recordAndApply(makeSplice(
+    offset,
+    new Uint8Array(0),
+    new Uint8Array([value & 0xFF]),
+    'insert-byte',
+    { offset, value: value & 0xFF }
+  ));
+}
+
+function deleteByteAt(offset) {
+  if (offset < 0 || offset >= state.buffer.length) return;
+  recordAndApply(makeSplice(
+    offset,
+    new Uint8Array([state.buffer[offset]]),
+    new Uint8Array(0),
+    'delete-byte',
+    { offset }
+  ));
+}
+
+// Saisie clavier : 2 caractères hex consécutifs remplacent l'octet.
+function handleHexKey(ch) {
+  if (edit.cursor < 0) return false;
+  const lower = ch.toLowerCase();
+  if (!/^[0-9a-f]$/.test(lower)) return false;
+  if (edit.halfNibble === '') {
+    edit.halfNibble = lower;
+    // Marque visuellement la case « en cours d'édition »
+    for (const line of HEX.pool) {
+      if (!line || line.style.display === 'none') continue;
+      const bytesSpan = line.children[1];
+      for (let i = 0; i < HEX_BYTES_PER_LINE; i++) {
+        const byteEl = bytesSpan.childNodes[i * 2];
+        if (byteEl && parseInt(byteEl.dataset.offset, 10) === edit.cursor) {
+          byteEl.classList.add('editing');
+          byteEl.textContent = lower.toUpperCase() + '·';
+        }
+      }
+    }
+    return true;
+  }
+  const byte = parseInt(edit.halfNibble + lower, 16);
+  edit.halfNibble = '';
+  editByte(edit.cursor, byte);
+  if (edit.cursor + 1 < state.buffer.length) setCursor(edit.cursor + 1);
+  return true;
+}
+
+// ----- Bindings clavier global --------------------------------------------
+
+document.addEventListener('keydown', (e) => {
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  // Ne pas interférer avec les raccourcis Ctrl/Cmd de Phase 5
+  if (e.ctrlKey || e.metaKey) return;
+  if (edit.cursor < 0 || !state.buffer) return;
+
+  if (e.key === 'ArrowLeft')  { setCursor(Math.max(0, edit.cursor - 1)); e.preventDefault(); return; }
+  if (e.key === 'ArrowRight') { setCursor(Math.min(state.buffer.length - 1, edit.cursor + 1)); e.preventDefault(); return; }
+  if (e.key === 'ArrowUp')    { setCursor(Math.max(0, edit.cursor - HEX_BYTES_PER_LINE)); e.preventDefault(); return; }
+  if (e.key === 'ArrowDown')  { setCursor(Math.min(state.buffer.length - 1, edit.cursor + HEX_BYTES_PER_LINE)); e.preventDefault(); return; }
+
+  if (e.key === 'Insert') { insertByte(edit.cursor, 0x00); e.preventDefault(); return; }
+  if (e.key === 'Delete') {
+    deleteByteAt(edit.cursor);
+    if (edit.cursor >= state.buffer.length) setCursor(state.buffer.length - 1);
+    e.preventDefault();
+    return;
+  }
+  if (e.key === 'Escape') { clearSelection(); e.preventDefault(); return; }
+
+  if (e.key.length === 1) {
+    const code = e.key.charCodeAt(0);
+    // Mode ASCII (§4.5) : tout caractère imprimable (32-126) remplace l'octet directement
+    if (edit.inAsciiMode && code >= 32 && code <= 126) {
+      editByte(edit.cursor, code);
+      if (edit.cursor + 1 < state.buffer.length) setCursor(edit.cursor + 1);
+      e.preventDefault();
+      return;
+    }
+    if (handleHexKey(e.key)) e.preventDefault();
+  }
+});
+
+// ----- Bindings souris (sélection sur le conteneur scrollable virtualisé) -
+
+const hexScroll = $('hex-scroll');
+if (hexScroll) {
+  hexScroll.addEventListener('mousedown', (e) => {
+    const target = e.target.closest('.hex-byte, .hex-ascii-char');
+    if (!target || target.dataset.offset == null) return;
+    const offset = parseInt(target.dataset.offset, 10);
+    if (!Number.isFinite(offset)) return;
+
+    // Marque visuellement l'octet exact cliqué — avant le guard pour qu'il
+    // soit toujours visible, y compris quand la plage MCU est verrouillée.
+    setClickCursor(offset);
+
+    // Guard : si un MCU est verrouillé et que l'octet cliqué est dans la plage
+    // sélectionnée, on absorbe le mousedown pour ne pas effacer la sélection.
+    // Le handler 'click' prendra le relais et constatera que c'est le même MCU (no-op).
+    if (overlayLocked && edit.selection.length > 0) {
+      const locked = edit.selection[0];
+      if (offset >= locked.start && offset < locked.end) return;
+    }
+
+    // Active le mode ASCII si le clic provient de la colonne ASCII (§4.5)
+    edit.inAsciiMode = target.classList.contains('hex-ascii-char');
+    edit.halfNibble = ''; // réinitialise la saisie hex partielle en cas de changement de mode
+    setCursor(offset);
+
+    if (e.shiftKey) {
+      if (edit.selection.length > 0) {
+        const last = edit.selection[edit.selection.length - 1];
+        last.end = Math.max(last.end, offset + 1);
+        last.start = Math.min(last.start, offset);
+        edit.selection = normalizeSelection(edit.selection);
+        refreshSelectionInDom();
+        updateSelectionInfo();
+      } else {
+        setSelectionRange(offset, offset);
+      }
+    } else if (e.ctrlKey || e.metaKey) {
+      addSelectionRange(offset, offset);
+      edit.dragAnchor = offset;
+      edit.dragging = true;
+    } else {
+      edit.dragAnchor = offset;
+      edit.dragging = true;
+      setSelectionRange(offset, offset);
+    }
+    e.preventDefault();
+  });
+
+  hexScroll.addEventListener('mousemove', (e) => {
+    if (!edit.dragging) return;
+    const target = e.target.closest('.hex-byte, .hex-ascii-char');
+    if (!target || target.dataset.offset == null) return;
+    const offset = parseInt(target.dataset.offset, 10);
+    if (!Number.isFinite(offset)) return;
+    const last = edit.selection[edit.selection.length - 1];
+    if (!last) return;
+    const a = edit.dragAnchor;
+    last.start = Math.min(a, offset);
+    last.end   = Math.max(a, offset) + 1;
+    edit.selection = normalizeSelection(edit.selection);
+    refreshSelectionInDom();
+    updateSelectionInfo();
+  });
+}
+
+document.addEventListener('mouseup', () => { edit.dragging = false; });
+
+// ----- Verrouillage bidirectionnel hex → image (clic simple sur un octet) ---
+// Un « clic » sur hexScroll (mousedown + mouseup sans déplacement) déclenche
+// le verrouillage MCU si l'octet appartient au scan data, ou déverrouille si
+// overlayLocked est déjà actif.
+// On utilise l'événement 'click' (pas 'mousedown') pour ne pas interférer avec
+// le début d'un drag de sélection.
+if (hexScroll) {
+  hexScroll.addEventListener('click', (e) => {
+    const target = e.target.closest('.hex-byte, .hex-ascii-char');
+    if (!target || target.dataset.offset == null) return;
+    const offset = parseInt(target.dataset.offset, 10);
+    if (!Number.isFinite(offset)) return;
+
+    // Calcule le MCU correspondant à l'octet cliqué selon le mode courant (A, B ou C)
+    const mcu = offsetToMcu(offset);
+
+    // Hors scan data (MCU = -1) : délock si verrouillé, sinon comportement normal
+    if (mcu < 0) {
+      if (overlayLocked) resetOverlayLock();
+      return;
+    }
+
+    // Même MCU déjà verrouillé : aucune action (conserve le highlight)
+    if (overlayLocked && mcu === lockedMcu) return;
+
+    // Nouveau lock ou switch vers un autre MCU
+    const range = mcuToByteRange(mcu);
+    if (!range || range.start > range.end) return;
+
+    edit.selection = [{ start: range.start, end: range.end + 1 }];
+    refreshSelectionInDom();
+    updateSelectionInfo && updateSelectionInfo();
+    clearOverlay();
+    drawLockedHighlight(mcu);
+    overlayLocked = true;
+    lockedMcu = mcu;
+
+    // Scrolle uniquement si la plage n'est pas déjà entièrement visible
+    scrollHexToOffsetIfNeeded(range.start, range.end);
+  });
+}
+
+// Mode C uniquement — délègue directement à offsetToMcuC.
+function offsetToMcu(offset) { return offsetToMcuC(offset); }
+
+// On reroute le hover hex de Phase 3 pour qu'il utilise le mode courant.
+// Sauvegarde du handler original au cas où on voudrait le réactiver.
+if (typeof onHexByteMouseenter === 'function') {
+  const _origHover = onHexByteMouseenter;
+  onHexByteMouseenter = function (e) {
+    // Highlight verrouillé — on ne touche pas à l'overlay.
+    if (overlayLocked) return;
+    const target = e.target;
+    if (!target || !target.classList) return;
+    if (!target.classList.contains('hex-byte') &&
+        !target.classList.contains('hex-ascii-char')) return;
+    const off = parseInt(target.dataset.offset, 10);
+    if (!Number.isFinite(off)) return;
+    target.classList.add('byte-hover');
+    if (typeof clearOverlay === 'function') clearOverlay();
+    const mcu = offsetToMcu(off);
+    if (mcu >= 0) {
+      if (typeof drawMcuHighlight === 'function') drawMcuHighlight(mcu, '#e8b86d', 0.35);
+      if (typeof hideTooltip === 'function') hideTooltip();
+    } else {
+      if (typeof showByteTooltip === 'function') showByteTooltip(off, e);
+    }
+  };
+  // Re-bind sur #hex-scroll (le handler attaché en Phase 3 référence l'ancien)
+  if (hexScroll) {
+    hexScroll.addEventListener('mouseover', onHexByteMouseenter);
+  }
+}
+
+// Bouton annuler le décodage Huffman : arrête le worker en cours.
+const huffmanCancelBtn = document.getElementById('huffman-cancel');
+if (huffmanCancelBtn) {
+  huffmanCancelBtn.addEventListener('click', () => {
+    cancelHuffmanDecode();
+    // Met à jour le statut Huffman
+    const status = document.getElementById('huffman-status');
+    if (status) status.textContent = 'Annulé';
+  });
+}
+
+// Mise à jour du statut Huffman dans la barre de progression (Mode C seul).
+function updateMappingNote() {
+  const status = document.getElementById('huffman-status');
+  if (!status) return;
+  if (huffmanWorker) {
+    // En cours — le pourcentage est déjà mis à jour par les messages du worker
+  } else if (mcuOffsets) {
+    status.textContent = mcuOffsets.length + ' MCU';
+  } else {
+    status.textContent = 'En attente…';
+  }
+}
+
+// ----- Outils rapides (§4.5) ----------------------------------------------
+
+function applyToSelection(fn, opName, params) {
+  if (selectionLength() === 0) {
+    showWarning('Aucune sélection — sélectionnez d\'abord une plage d\'octets.');
+    return;
+  }
+  const writes = [];
+  for (const off of iterSelection()) {
+    const newVal = fn(state.buffer[off], off) & 0xFF;
+    writes.push({ offset: off, value: newVal });
+  }
+  const entry = makeDiffFromWrites(writes, opName, params);
+  if (entry) recordAndApply(entry);
+}
+
+function toolRandomize() {
+  applyToSelection(() => (Math.random() * 256) | 0, 'randomize', null);
+}
+
+function toolXor() {
+  const v = parseInt($('tool-xor-val').value, 16);
+  if (Number.isNaN(v)) { showWarning('Valeur XOR invalide.'); return; }
+  applyToSelection(b => b ^ v, 'xor', { value: v });
+}
+
+function toolAdd() {
+  const v = parseInt($('tool-addsub-val').value, 10);
+  if (Number.isNaN(v)) { showWarning('Valeur Add invalide.'); return; }
+  applyToSelection(b => (b + v) & 0xFF, 'add', { value: v });
+}
+function toolSub() {
+  const v = parseInt($('tool-addsub-val').value, 10);
+  if (Number.isNaN(v)) { showWarning('Valeur Sub invalide.'); return; }
+  applyToSelection(b => (b - v) & 0xFF, 'sub', { value: v });
+}
+
+// Shift : décale chaque range de N positions ; vides remplis par 0x00.
+function toolShift() {
+  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  const n = parseInt($('tool-shift-n').value, 10) || 0;
+  const writes = [];
+  for (const r of edit.selection) {
+    const len = r.end - r.start;
+    const snap = state.buffer.slice(r.start, r.end);
+    for (let i = 0; i < len; i++) {
+      const src = i - n;
+      writes.push({ offset: r.start + i, value: (src >= 0 && src < len) ? snap[src] : 0x00 });
+    }
+  }
+  const entry = makeDiffFromWrites(writes, 'shift', { n });
+  if (entry) recordAndApply(entry);
+}
+
+function toolReverse() {
+  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  const writes = [];
+  for (const r of edit.selection) {
+    const len = r.end - r.start;
+    const snap = state.buffer.slice(r.start, r.end);
+    for (let i = 0; i < len; i++) {
+      writes.push({ offset: r.start + i, value: snap[len - 1 - i] });
+    }
+  }
+  const entry = makeDiffFromWrites(writes, 'reverse', null);
+  if (entry) recordAndApply(entry);
+}
+
+function toolRepeat() {
+  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  const writes = [];
+  for (const r of edit.selection) {
+    const first = state.buffer[r.start];
+    for (let i = r.start + 1; i < r.end; i++) writes.push({ offset: i, value: first });
+  }
+  const entry = makeDiffFromWrites(writes, 'repeat', null);
+  if (entry) recordAndApply(entry);
+}
+
+// Inject RST : insère [0xFF, 0xDn] à l'offset courant (curseur).
+function toolInjectRst() {
+  if (edit.cursor < 0) { showWarning('Placez d\'abord le curseur.'); return; }
+  const idx = parseInt($('tool-rst-idx').value, 10) & 0x07;
+  recordAndApply(makeSplice(
+    edit.cursor,
+    new Uint8Array(0),
+    new Uint8Array([0xFF, 0xD0 | idx]),
+    'inject-rst',
+    { offset: edit.cursor, index: idx }
+  ));
+  setCursor(edit.cursor + 2);
+}
+
+// Delete RST : supprime tous les couples 0xFF 0xDn dans la sélection.
+function toolDeleteRst() {
+  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  const toDelete = [];
+  for (const r of edit.selection) {
+    let i = r.start;
+    while (i < r.end - 1) {
+      if (state.buffer[i] === 0xFF && state.buffer[i + 1] >= 0xD0 && state.buffer[i + 1] <= 0xD7) {
+        toDelete.push(i);
+        i += 2;
+      } else {
+        i++;
+      }
+    }
+  }
+  if (toDelete.length === 0) {
+    showWarning('Aucun RST marker trouvé dans la sélection.');
+    return;
+  }
+  // Supprime de la fin vers le début pour préserver les offsets restants
+  toDelete.sort((a, b) => b - a);
+  for (const off of toDelete) {
+    recordAndApply(makeSplice(
+      off,
+      new Uint8Array([state.buffer[off], state.buffer[off + 1]]),
+      new Uint8Array(0),
+      'delete-rst',
+      { offset: off }
+    ));
+  }
+  clearSelection();
+}
+
+// Swap blocks : 2 clics. 1er = mémorise la sélection. 2e = swap (longueurs égales).
+function toolSwap() {
+  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  if (edit.selection.length > 1) { showWarning('Swap : utilisez une sélection contigue.'); return; }
+  const r = edit.selection[0];
+  if (edit.swapFirst === null) {
+    edit.swapFirst = { start: r.start, length: r.end - r.start };
+    swapStatusEl.textContent =
+      `1ʳᵉ sélection mémorisée (${edit.swapFirst.length} o @0x${formatOffset(edit.swapFirst.start)}) ` +
+      `— sélectionnez la 2ᵉ puis cliquez Swap.`;
+    document.querySelector('[data-tool="swap"]').classList.add('swap-armed');
+    return;
+  }
+  const a = edit.swapFirst;
+  const b = { start: r.start, length: r.end - r.start };
+  if (a.length !== b.length) {
+    showWarning(`Swap : longueurs différentes (${a.length} vs ${b.length}).`);
+    return;
+  }
+  const aEnd = a.start + a.length;
+  const bEnd = b.start + b.length;
+  if (!(aEnd <= b.start || bEnd <= a.start)) {
+    showWarning('Swap : les deux plages se chevauchent.');
+    edit.swapFirst = null;
+    swapStatusEl.textContent = '';
+    document.querySelector('[data-tool="swap"]').classList.remove('swap-armed');
+    return;
+  }
+  const writes = [];
+  for (let i = 0; i < a.length; i++) {
+    writes.push({ offset: a.start + i, value: state.buffer[b.start + i] });
+    writes.push({ offset: b.start + i, value: state.buffer[a.start + i] });
+  }
+  const entry = makeDiffFromWrites(writes, 'swap', { a: a.start, b: b.start, length: a.length });
+  if (entry) recordAndApply(entry);
+  edit.swapFirst = null;
+  swapStatusEl.textContent = '';
+  document.querySelector('[data-tool="swap"]').classList.remove('swap-armed');
+}
+
+// Bit flip : flip N bits aléatoires dans la sélection.
+function toolBitFlip() {
+  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  const n = Math.max(1, parseInt($('tool-bitflip-n').value, 10) || 1);
+  const offsets = [];
+  for (const off of iterSelection()) offsets.push(off);
+  if (offsets.length === 0) return;
+  // Accumule les flips successifs sur un même octet (XOR cumulatif)
+  const accum = new Map();
+  for (let i = 0; i < n; i++) {
+    const off = offsets[(Math.random() * offsets.length) | 0];
+    const bit = 1 << ((Math.random() * 8) | 0);
+    accum.set(off, (accum.get(off) || 0) ^ bit);
+  }
+  const writes = [];
+  for (const [off, mask] of accum.entries()) {
+    writes.push({ offset: off, value: state.buffer[off] ^ mask });
+  }
+  const entry = makeDiffFromWrites(writes, 'bitflip', { n });
+  if (entry) recordAndApply(entry);
+}
+
+function toolInsertByte() {
+  if (edit.cursor < 0) { showWarning('Placez d\'abord le curseur.'); return; }
+  const v = parseInt($('tool-insert-val').value, 16);
+  if (Number.isNaN(v)) { showWarning('Valeur Insert invalide.'); return; }
+  insertByte(edit.cursor, v);
+}
+function toolDeleteByte() {
+  if (edit.cursor < 0) { showWarning('Placez d\'abord le curseur.'); return; }
+  deleteByteAt(edit.cursor);
+  if (edit.cursor >= state.buffer.length) setCursor(state.buffer.length - 1);
+}
+
+const TOOLS = {
+  'randomize':   toolRandomize,
+  'xor':         toolXor,
+  'add':         toolAdd,
+  'sub':         toolSub,
+  'shift':       toolShift,
+  'reverse':     toolReverse,
+  'repeat':      toolRepeat,
+  'inject-rst':  toolInjectRst,
+  'delete-rst':  toolDeleteRst,
+  'swap':        toolSwap,
+  'bitflip':     toolBitFlip,
+  'insert-byte': toolInsertByte,
+  'delete-byte': toolDeleteByte,
+};
+document.querySelectorAll('button.tool').forEach(btn => {
+  if (!btn.dataset.tool) return;
+  btn.addEventListener('click', () => {
+    const fn = TOOLS[btn.dataset.tool];
+    if (fn) fn();
+  });
+});
+
+// ============================================================
+// (Le gestionnaire d'onglets de base est remplacé par setupPhase5Bindings()
+// qui ajoute la persistance localStorage.)
+// ============================================================
+
+// ============================================================
+// Phase 5 — Historique (undo/redo) + opsLog
+// cf. SPECS §3.3 (stack de diffs, pas de snapshots) + §4.7 (replay)
+// ============================================================
+// Un « diff » = liste de modifications atomiques { offset, old, new }.
+// Inversible en swappant old↔new. Pour les ops qui changent la taille
+// (insert/delete), on stocke l'opération sous forme « rangeSplice » :
+//   { type:'splice', offset, removed:Uint8Array, inserted:Uint8Array }
+// — réversible en échangeant `removed` et `inserted`.
+
+// Limite de profondeur (SPECS §10 : éviter d'exploser la mémoire)
+const HISTORY_MAX = 200;
+
+// Référence vers le hook de re-rendu après mutation. Si pas dispo, on
+// utilise un fallback complet (parse + rerenders).
+function notifyBufferChanged() {
+  // Reparse (rapide pour < 5 MB) + statut + structure + hex + image
+  state.parsed = parseJpeg(state.buffer);
+  // Phase 3 : reconstruit la table de coloration des octets pour le hex viewer
+  byteTypeArr = buildByteTypeArray(state.buffer, state.parsed);
+  updateStatusBar();
+  if (typeof renderHex === 'function')             renderHex(state.buffer);
+  if (typeof renderStructurePanel === 'function')  renderStructurePanel(state.parsed);
+  if (state.livePreview) {
+    if (typeof scheduleRender === 'function')      scheduleRender();
+    else if (typeof renderImage === 'function')    renderImage(state.buffer);
+  }
+}
+
+// Applique un diff en avant (forward = true) ou en arrière (false).
+// Met à jour le buffer en place pour les diffs ponctuels ; remplace
+// la référence pour les splices (insert/delete).
+function applyDiff(entry, forward) {
+  if (entry.type === 'splice') {
+    // Pour les splices on reconstruit le buffer
+    const off = entry.offset;
+    const buf = state.buffer;
+    const part = forward ? entry.inserted : entry.removed;
+    const rem  = forward ? entry.removed  : entry.inserted;
+    const newLen = buf.length - rem.length + part.length;
+    const next = new Uint8Array(newLen);
+    next.set(buf.subarray(0, off), 0);
+    next.set(part, off);
+    next.set(buf.subarray(off + rem.length), off + part.length);
+    state.buffer = next;
+    state.fileSize = next.length;
+    return;
+  }
+  // Diff par octets : applique forward ou revert
+  const diffs = entry.diffs;
+  if (forward) {
+    for (let i = 0; i < diffs.length; i++) state.buffer[diffs[i].offset] = diffs[i].new;
+  } else {
+    for (let i = 0; i < diffs.length; i++) state.buffer[diffs[i].offset] = diffs[i].old;
+  }
+}
+
+// Enregistre une opération et l'applique. C'est le point d'entrée
+// unique pour toute mutation du buffer (utilisé par les outils, l'édition,
+// et tout futur module).
+function recordAndApply(entry) {
+  // Vide la pile de redo (toute nouvelle action invalide l'historique alternatif)
+  state.redoStack.length = 0;
+
+  applyDiff(entry, true);
+  state.undoStack.push(entry);
+  if (state.undoStack.length > HISTORY_MAX) {
+    // Pop la plus vieille : pas idéal pour le replay strict, mais raisonnable
+    state.undoStack.shift();
+  }
+
+  // Log opérationnel (§4.7) : on garde la sémantique de l'op, pas les diffs
+  if (entry.op) {
+    state.opsLog.push({
+      op: entry.op,
+      params: entry.params || null,
+      ts: Date.now(),
+      // Pour les diffs ponctuels on enregistre aussi la liste (utile pour replay)
+      diffSize: entry.diffs ? entry.diffs.length :
+                entry.type === 'splice' ? (entry.inserted.length - entry.removed.length) : 0,
+    });
+  }
+
+  notifyBufferChanged();
+  refreshHistoryUI();
+  refreshUndoRedoButtons();
+
+  // Mode C — invalider le cache d'offsets Huffman et relancer le décodage.
+  // Toute modification du buffer rend les offsets calculés obsolètes.
+  mcuOffsets = null;
+  startHuffmanDecode();
+
+  // Restaurer le highlight verrouillé si un MCU était sélectionné avant l'opération.
+  // Sans ce bloc, les outils (Randomize, XOR, etc.) effacent la sélection hex
+  // et le highlight image car notifyBufferChanged() reconstruit le DOM.
+  if (overlayLocked && lockedMcu >= 0) {
+    const range = mcuToByteRange(lockedMcu);
+    if (range) {
+      edit.selection = [{ start: range.start, end: range.end + 1 }];
+      refreshSelectionInDom();
+      updateSelectionInfo && updateSelectionInfo();
+      clearOverlay();
+      drawLockedHighlight(lockedMcu);
+    }
+  }
+}
+
+// Helper pour créer un diff ponctuel à partir d'un dict { offset → newByte }
+function makeDiffFromWrites(writes, opName, params) {
+  const diffs = [];
+  for (const w of writes) {
+    const old = state.buffer[w.offset];
+    if (old !== w.value) diffs.push({ offset: w.offset, old, new: w.value });
+  }
+  if (diffs.length === 0) return null;
+  return { op: opName, params, diffs };
+}
+
+// Helper pour un splice (insert/delete d'une plage)
+function makeSplice(offset, removed, inserted, opName, params) {
+  return {
+    type: 'splice',
+    op: opName,
+    params,
+    offset,
+    removed: removed instanceof Uint8Array ? removed : new Uint8Array(removed),
+    inserted: inserted instanceof Uint8Array ? inserted : new Uint8Array(inserted),
+  };
+}
+
+function undo() {
+  if (state.undoStack.length === 0) return;
+  const entry = state.undoStack.pop();
+  applyDiff(entry, false);
+  state.redoStack.push(entry);
+  // Log : marque une annulation (utile pour le replay UI mais pas pour export)
+  notifyBufferChanged();
+  refreshHistoryUI();
+  refreshUndoRedoButtons();
+  showToast('Undo : ' + (entry.op || 'modification'));
+
+  // Si un MCU était verrouillé, re-appliquer la sélection et le highlight
+  if (overlayLocked && lockedMcu >= 0) {
+    const range = mcuToByteRange(lockedMcu);
+    if (range) {
+      edit.selection = [{ start: range.start, end: range.end + 1 }];
+      refreshSelectionInDom();
+      updateSelectionInfo && updateSelectionInfo();
+      clearOverlay();
+      drawLockedHighlight(lockedMcu);
+    }
+  }
+}
+
+function redo() {
+  if (state.redoStack.length === 0) return;
+  const entry = state.redoStack.pop();
+  applyDiff(entry, true);
+  state.undoStack.push(entry);
+  notifyBufferChanged();
+  refreshHistoryUI();
+  refreshUndoRedoButtons();
+  showToast('Redo : ' + (entry.op || 'modification'));
+
+  // Si un MCU était verrouillé, re-appliquer la sélection et le highlight
+  if (overlayLocked && lockedMcu >= 0) {
+    const range = mcuToByteRange(lockedMcu);
+    if (range) {
+      edit.selection = [{ start: range.start, end: range.end + 1 }];
+      refreshSelectionInDom();
+      updateSelectionInfo && updateSelectionInfo();
+      clearOverlay();
+      drawLockedHighlight(lockedMcu);
+    }
+  }
+}
+
+// Restauration à un index d'historique (clic sur le panneau Historique).
+// On ramène l'état au point « après application du diff #targetIndex ».
+// Implémentation : annule tout jusque-là, puis rejoue jusqu'à l'index.
+function restoreToHistoryIndex(targetIndex) {
+  // targetIndex est l'index dans la concaténation [undoStack, redoStack inversée]
+  // En pratique : pile combinée = undoStack + redoStack.reverse()
+  // L'état courant correspond à la fin de undoStack.
+  const combined = state.undoStack.concat(state.redoStack.slice().reverse());
+  if (targetIndex < -1 || targetIndex >= combined.length) return;
+
+  // -1 = état original (avant toute opération)
+  const currentIndex = state.undoStack.length - 1;
+  if (targetIndex === currentIndex) return;
+
+  if (targetIndex < currentIndex) {
+    // On annule jusqu'à atteindre targetIndex
+    while (state.undoStack.length - 1 > targetIndex) {
+      const e = state.undoStack.pop();
+      applyDiff(e, false);
+      state.redoStack.push(e);
+    }
+  } else {
+    // On rejoue
+    while (state.undoStack.length - 1 < targetIndex) {
+      if (state.redoStack.length === 0) break;
+      const e = state.redoStack.pop();
+      applyDiff(e, true);
+      state.undoStack.push(e);
+    }
+  }
+  notifyBufferChanged();
+  refreshHistoryUI();
+  refreshUndoRedoButtons();
+}
+
+function clearHistory() {
+  state.undoStack.length = 0;
+  state.redoStack.length = 0;
+  state.opsLog.length = 0;
+  refreshHistoryUI();
+  refreshUndoRedoButtons();
+}
+
+function refreshUndoRedoButtons() {
+  const u = $('btn-undo');
+  const r = $('btn-redo');
+  if (u) u.disabled = state.undoStack.length === 0;
+  if (r) r.disabled = state.redoStack.length === 0;
+  // Met à jour le bouton Undo sticky du panneau Outils
+  updateUndoCount();
+}
+
+// Met à jour le compteur d'actions annulables et l'état disabled du bouton Undo sticky.
+function updateUndoCount() {
+  const el = $('undo-count');
+  const btn = $('undo-btn');
+  const n = state.undoStack ? state.undoStack.length : 0;
+  // Affiche le nombre d'actions si > 0, sinon vide
+  if (el) el.textContent = n > 0 ? `${n} action${n > 1 ? 's' : ''}` : '';
+  // Désactive le bouton quand la pile est vide
+  if (btn) btn.disabled = n === 0;
+}
+
+// ============================================================
+// Phase 5 — Panneau Historique (§4.7)
+// ============================================================
+function refreshHistoryUI() {
+  const container = $('history-container');
+  const summary   = $('history-summary');
+  if (!container) return;
+
+  const combined = state.undoStack.concat(state.redoStack.slice().reverse());
+  const currentIndex = state.undoStack.length - 1;
+
+  if (summary) {
+    summary.textContent = combined.length === 0
+      ? '—'
+      : `${state.undoStack.length} appliquée(s) · ${state.redoStack.length} annulée(s)`;
+  }
+
+  if (combined.length === 0) {
+    container.innerHTML = '<div class="history-empty">Aucune opération enregistrée.</div>';
+    return;
+  }
+
+  const parts = ['<ul class="history-list">'];
+  // Item « état initial » (-1)
+  parts.push(historyItemHtml(-1, currentIndex, { op: 'fichier original', _initial: true }));
+  for (let i = 0; i < combined.length; i++) {
+    parts.push(historyItemHtml(i, currentIndex, combined[i]));
+  }
+  parts.push('</ul>');
+  container.innerHTML = parts.join('');
+
+  container.querySelectorAll('.history-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.index, 10);
+      if (Number.isFinite(idx)) restoreToHistoryIndex(idx);
+    });
+  });
+}
+
+function historyItemHtml(index, currentIndex, entry) {
+  const cls = index === currentIndex ? 'history-item current' : 'history-item';
+  const label = index === -1 ? '⏵' : (index + 1);
+  const op = entry.op || 'modification';
+  let detail = '';
+  if (entry._initial) {
+    detail = 'point de départ';
+  } else if (entry.type === 'splice') {
+    const delta = entry.inserted.length - entry.removed.length;
+    detail = `splice @0x${entry.offset.toString(16).toUpperCase()} ` +
+             `(${delta >= 0 ? '+' : ''}${delta} o)`;
+  } else if (entry.diffs) {
+    detail = `${entry.diffs.length} octet(s) modifié(s)`;
+  }
+  return (
+    '<li class="history-item' + (index === currentIndex ? ' current' : '') + '" ' +
+        'data-index="' + index + '" title="Restaurer cet état">' +
+      '<span class="history-idx">' + label + '</span>' +
+      '<span class="history-op">'  + escapeHtmlSafe(op) + '</span>' +
+      '<span class="history-detail">' + escapeHtmlSafe(detail) + '</span>' +
+      '<button class="history-restore">Restaurer</button>' +
+    '</li>'
+  );
+}
+
+// escapeHtml peut déjà exister (phase 2). On fournit un alias sûr.
+function escapeHtmlSafe(s) {
+  if (typeof escapeHtml === 'function') return escapeHtml(String(s));
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+// ============================================================
+// Phase 5 — Exports (cf. SPECS §4.7)
+// ============================================================
+
+// Helper : déclenche le téléchargement d'un Blob
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Révocation différée pour laisser le temps au navigateur de lire l'URL
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Nom de fichier suffixé (« mon.jpg » → « mon-mosh.jpg »)
+function deriveFilename(suffix, extension) {
+  const base = state.filename
+    ? state.filename.replace(/\.(jpe?g)$/i, '')
+    : 'datamosh';
+  return base + suffix + '.' + extension;
+}
+
+function exportJpg() {
+  if (!state.buffer) return;
+  const blob = new Blob([state.buffer], { type: 'image/jpeg' });
+  downloadBlob(blob, deriveFilename('-mosh', 'jpg'));
+  showToast('Téléchargement JPG démarré');
+}
+
+function exportPng() {
+  if (!imageCanvas || imageCanvas.width === 0) {
+    showToast('Aucun rendu canvas à exporter', true);
+    return;
+  }
+  imageCanvas.toBlob((blob) => {
+    if (!blob) { showToast('Échec génération PNG', true); return; }
+    downloadBlob(blob, deriveFilename('-render', 'png'));
+    showToast('Téléchargement PNG démarré');
+  }, 'image/png');
+}
+
+// Diff binaire : tableau des octets modifiés vs originalBuffer.
+// Pour les tailles différentes, on inclut un marqueur de truncation/extension.
+function exportDiff() {
+  if (!state.buffer || !state.originalBuffer) return;
+  const orig = state.originalBuffer;
+  const cur  = state.buffer;
+  const minLen = Math.min(orig.length, cur.length);
+  const diff = [];
+  for (let i = 0; i < minLen; i++) {
+    if (orig[i] !== cur[i]) {
+      diff.push({ offset: i, original: orig[i], modified: cur[i] });
+    }
+  }
+  const payload = {
+    filename: state.filename,
+    originalSize: orig.length,
+    currentSize: cur.length,
+    diff,
+  };
+  if (cur.length > orig.length) {
+    payload.appended = Array.from(cur.subarray(orig.length));
+  } else if (cur.length < orig.length) {
+    payload.truncatedFrom = cur.length;
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  downloadBlob(blob, deriveFilename('-diff', 'json'));
+  showToast(`Diff exporté : ${diff.length} octet(s) modifié(s)`);
+}
+
+function exportOps() {
+  const payload = {
+    filename: state.filename,
+    originalSize: state.originalBuffer ? state.originalBuffer.length : 0,
+    operations: state.opsLog,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  downloadBlob(blob, deriveFilename('-ops', 'json'));
+  showToast(`${state.opsLog.length} opération(s) exportée(s)`);
+}
+
+function exportStructure() {
+  if (!state.parsed) {
+    showToast('Aucune structure parsée', true);
+    return;
+  }
+  // Sérialisation safe : les Float32Array (matrices DQT) ne sont pas
+  // JSON.stringify-natifs → on les convertit.
+  const safe = JSON.parse(JSON.stringify(state.parsed, (key, val) => {
+    if (val instanceof Float32Array || val instanceof Uint8Array) {
+      return Array.from(val);
+    }
+    return val;
+  }));
+  const blob = new Blob([JSON.stringify(safe, null, 2)], { type: 'application/json' });
+  downloadBlob(blob, deriveFilename('-structure', 'json'));
+  showToast('Structure exportée');
+}
+
+function copyCanvasBase64() {
+  if (!imageCanvas || imageCanvas.width === 0) {
+    showToast('Aucun rendu canvas à copier', true);
+    return;
+  }
+  const dataUrl = imageCanvas.toDataURL('image/png');
+  // Tentative via Clipboard API ; fallback textarea pour les contextes non-sécurisés
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(dataUrl).then(
+      () => showToast(`Base64 copié (${(dataUrl.length / 1024).toFixed(1)} KB)`),
+      (err) => {
+        console.warn('Clipboard API a échoué, fallback textarea', err);
+        copyViaTextarea(dataUrl);
+      }
+    );
+  } else {
+    copyViaTextarea(dataUrl);
+  }
+}
+
+function copyViaTextarea(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    const ok = document.execCommand('copy');
+    showToast(ok ? 'Base64 copié' : 'Échec copie', !ok);
+  } catch (err) {
+    console.warn('execCommand copy a échoué', err);
+    showToast('Échec copie : ' + err.message, true);
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+
+// ============================================================
+// Phase 5 — Reset (cf. SPECS §4.7)
+// ============================================================
+function resetToOriginal() {
+  if (!state.originalBuffer) return;
+  // Confirmation si l'utilisateur a fait des modifications
+  if (state.undoStack.length > 0) {
+    if (!confirm('Réinitialiser le fichier ? Toutes les modifications seront perdues.')) {
+      return;
+    }
+  }
+  state.buffer   = new Uint8Array(state.originalBuffer);
+  state.fileSize = state.buffer.length;
+  state.undoStack.length = 0;
+  state.redoStack.length = 0;
+  state.opsLog.length    = 0;
+  // Libère le verrouillage du highlight MCU si actif
+  if (typeof resetOverlayLock === 'function') resetOverlayLock();
+  notifyBufferChanged();
+  refreshHistoryUI();
+  refreshUndoRedoButtons();
+  showToast('Fichier restauré à l\'original');
+}
+
+// Ferme le fichier et revient à l'écran d'accueil
+function closeFile() {
+  if (state.undoStack.length > 0 &&
+      !confirm('Fermer le fichier ? Les modifications non exportées seront perdues.')) {
+    return;
+  }
+  state.buffer = null;
+  state.originalBuffer = null;
+  state.filename = '';
+  state.fileSize = 0;
+  state.parsed = null;
+  state.undoStack.length = 0;
+  state.redoStack.length = 0;
+  state.opsLog.length    = 0;
+  welcomeScreen.classList.remove('hidden');
+  appEl.classList.add('hidden');
+  statusBar.classList.add('hidden');
+  refreshUndoRedoButtons();
+}
+
+// ============================================================
+// Phase 5 — Toast notifications
+// ============================================================
+let toastTimer = null;
+function showToast(message, isError) {
+  const t = $('toast');
+  if (!t) { console.log('[toast]', message); return; }
+  t.textContent = message;
+  t.classList.toggle('error', !!isError);
+  t.classList.add('visible');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    t.classList.remove('visible');
+  }, 2400);
+}
+
+// ============================================================
+// Phase 5 — Persistance des préférences (localStorage)
+// ============================================================
+const PREFS_KEY = 'datamoshing.prefs.v1';
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch (err) {
+    console.warn('[prefs] lecture localStorage échouée', err);
+    return {};
+  }
+}
+
+function savePrefs(patch) {
+  try {
+    const cur = loadPrefs();
+    const merged = Object.assign({}, cur, patch);
+    localStorage.setItem(PREFS_KEY, JSON.stringify(merged));
+  } catch (err) {
+    console.warn('[prefs] écriture localStorage échouée', err);
+  }
+}
+
+function applyPrefsToUI() {
+  const prefs = loadPrefs();
+
+  // Live preview
+  if (typeof prefs.livePreview === 'boolean') {
+    state.livePreview = prefs.livePreview;
+    const cb = $('toggle-live-preview');
+    if (cb) cb.checked = prefs.livePreview;
+    const cont = $('image-container');
+    if (cont) cont.classList.toggle('paused', !prefs.livePreview);
+  }
+  // Onglet actif
+  if (prefs.activeTab) {
+    activateTab(prefs.activeTab);
+  }
+}
+
+function activateTab(name) {
+  document.querySelectorAll('.panel-tabs .tab').forEach(b => {
+    b.classList.toggle('active', b.dataset.tab === name);
+  });
+  document.querySelectorAll('.tab-content').forEach(c => {
+    c.classList.toggle('active', c.id === 'tab-' + name);
+  });
+}
+
+// ============================================================
+// Phase 5 — Bindings UI
+// ============================================================
+function setupPhase5Bindings() {
+  // Undo / Redo (boutons barre de statut)
+  $('btn-undo').addEventListener('click', undo);
+  $('btn-redo').addEventListener('click', redo);
+  // Bouton Undo sticky dans le panneau Outils (même fonction)
+  const undoBtnPanel = $('undo-btn');
+  if (undoBtnPanel) undoBtnPanel.addEventListener('click', undo);
+
+  // Reset
+  $('btn-reset').addEventListener('click', resetToOriginal);
+
+  // Fermer le fichier
+  $('btn-close').addEventListener('click', closeFile);
+
+  // Export — menu déroulant
+  const exportBtn  = $('btn-export');
+  const exportMenu = $('export-menu');
+  exportBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (exportMenu.classList.contains('hidden')) {
+      const rect = exportBtn.getBoundingClientRect();
+      exportMenu.style.top  = (rect.bottom + 4) + 'px';
+      // Aligne le menu à droite du bouton (pas plus loin que le viewport)
+      const menuW = 240;
+      const left = Math.max(8, Math.min(window.innerWidth - menuW - 8, rect.right - menuW));
+      exportMenu.style.left = left + 'px';
+      exportMenu.classList.remove('hidden');
+    } else {
+      exportMenu.classList.add('hidden');
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!exportMenu.classList.contains('hidden') &&
+        !exportMenu.contains(e.target) && e.target !== exportBtn) {
+      exportMenu.classList.add('hidden');
+    }
+  });
+  exportMenu.querySelectorAll('button[data-export]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const kind = btn.dataset.export;
+      exportMenu.classList.add('hidden');
+      switch (kind) {
+        case 'jpg':       exportJpg(); break;
+        case 'png':       exportPng(); break;
+        case 'diff':      exportDiff(); break;
+        case 'ops':       exportOps(); break;
+        case 'structure': exportStructure(); break;
+        case 'base64':    copyCanvasBase64(); break;
+      }
+    });
+  });
+
+  // Toggle live preview
+  const liveCb = $('toggle-live-preview');
+  liveCb.addEventListener('change', () => {
+    state.livePreview = liveCb.checked;
+    const cont = $('image-container');
+    if (cont) cont.classList.toggle('paused', !liveCb.checked);
+    savePrefs({ livePreview: liveCb.checked });
+    if (liveCb.checked && state.buffer) {
+      // Re-déclenche un rendu immédiat à la réactivation
+      if (typeof scheduleRender === 'function')   scheduleRender();
+      else if (typeof renderImage === 'function') renderImage(state.buffer);
+    }
+    showToast(liveCb.checked ? 'Live preview activé' : 'Live preview désactivé');
+  });
+
+  // Onglets → persistance + ajout onglet history
+  document.querySelectorAll('.panel-tabs .tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const name = btn.dataset.tab;
+      activateTab(name);
+      savePrefs({ activeTab: name });
+    });
+  });
+
+  // Bouton « Vider l'historique »
+  const clearBtn = $('btn-history-clear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      if (state.undoStack.length === 0 && state.redoStack.length === 0) return;
+      if (confirm('Vider tout l\'historique ? Les annulations ne seront plus possibles (les modifications restent appliquées).')) {
+        clearHistory();
+        showToast('Historique vidé');
+      }
+    });
+  }
+
+  // Raccourcis clavier globaux
+  window.addEventListener('keydown', (e) => {
+    // Pas de raccourcis si on est dans un input/textarea (sauf Ctrl+Z classique de l'OS)
+    const tag = (e.target && e.target.tagName) || '';
+    const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    const mod = e.ctrlKey || e.metaKey;
+    if (!mod) return;
+
+    if (e.key === 'z' || e.key === 'Z') {
+      if (isInput) return; // laisse le browser gérer l'undo natif
+      e.preventDefault();
+      if (e.shiftKey) redo(); else undo();
+    } else if (e.key === 'y' || e.key === 'Y') {
+      if (isInput) return;
+      e.preventDefault();
+      redo();
+    } else if (e.key === 's' || e.key === 'S') {
+      // Ctrl+S → export JPG (raccourci pratique)
+      e.preventDefault();
+      if (state.buffer) exportJpg();
+    }
+  });
+
+  // Tooltips contextuels sur les segments structure (ajoutés après render)
+  // Implémenté via data-tooltip CSS — voir enrichTooltips() ci-dessous.
+}
+
+// Ajoute des tooltips explicatifs aux segments du panneau Structure.
+// Re-appelé à chaque render via un hook dans renderStructurePanel.
+function enrichSegmentTooltips() {
+  const explain = {
+    SOI:  'Start Of Image — début du fichier JPG',
+    EOI:  'End Of Image — fin du fichier JPG',
+    SOS:  'Start Of Scan — en-tête du flux entropy-coded',
+    SCAN: 'Scan data — données encodées Huffman (zone de datamoshing principale)',
+    DQT:  'Quantization Table — affecte la qualité globale',
+    DHT:  'Huffman Table — corrompre rend souvent l\'image indécodable',
+    DRI:  'Define Restart Interval — espace entre RST markers',
+    SOF0: 'Start Of Frame (baseline) — dimensions et composants',
+    SOF2: 'Start Of Frame (progressive) — non pleinement supporté',
+    COM:  'Commentaire texte',
+  };
+  const tree = $('structure-tree');
+  if (!tree) return;
+  tree.querySelectorAll('.seg-item').forEach(el => {
+    const type = el.dataset.type || el.querySelector('.seg-type')?.textContent;
+    if (!type) return;
+    let tip = explain[type];
+    if (!tip && type.startsWith('APP')) tip = 'Métadonnées (APPn) — Exif, JFIF, XMP, ICC, etc.';
+    if (!tip && type.startsWith('RST')) tip = 'Restart marker — resync du décodeur';
+    if (tip) el.setAttribute('data-tooltip', tip);
+  });
+}
+
+// ============================================================
+// Callback déclenché après chargement réussi du fichier
+// cf. SPECS §3.3 — chaîne complète : parse → status → hex → image → structure
+// ============================================================
+function onFileLoaded() {
+  state.parsed = parseJpeg(state.buffer);
+  // Phase 3 : recalcule la table de coloration (header/scan/rst) une fois par parse
+  byteTypeArr = buildByteTypeArray(state.buffer, state.parsed);
+  updateStatusBar();
+  renderHex(state.buffer);
+  renderImage(state.buffer);
+  renderStructurePanel(state.parsed);
+  if (state.parsed && state.parsed.isProgressive) {
+    console.warn('JPEG progressif détecté (SOF2). Seul le baseline (SOF0) est pleinement supporté.');
+  }
+  // Phase 5
+  state.undoStack.length = 0;
+  state.redoStack.length = 0;
+  state.opsLog.length    = 0;
+  refreshHistoryUI();
+  refreshUndoRedoButtons();
+  enrichSegmentTooltips();
+  // Phase 4 — réinitialise édition/sélection à chaque nouveau fichier
+  edit.cursor = -1;
+  edit.halfNibble = '';
+  edit.selection = [];
+  edit.swapFirst = null;
+  edit.mappingMode = 'C'; // Mode C fixe
+  if (swapStatusEl) swapStatusEl.textContent = '';
+  if (criticalWarning) criticalWarning.classList.add('hidden');
+  // Mode C — invalider les offsets Huffman calculés pour le fichier précédent
+  mcuOffsets = null;
+  cancelHuffmanDecode();
+  updateSelectionInfo();
+  updateMappingNote();
+  // Lancer automatiquement le décodage Huffman (Mode C est le seul mode)
+  if (state.parsed) {
+    startHuffmanDecode();
+  }
+  // Libère le verrouillage du highlight MCU si actif (nouveau fichier)
+  // resetOverlayLock appelle déjà setClickCursor(-1) → pas besoin d'un appel séparé
+  if (typeof resetOverlayLock === 'function') resetOverlayLock();
+}
+
+// ============================================================
+// Chargement de fichier (cf. SPECS §4.1)
+// ============================================================
+function loadFile(file) {
+  // Vérification basique de l'extension (la signature FFD8 est vérifiée après lecture)
+  const name = file.name.toLowerCase();
+  if (!name.endsWith('.jpg') && !name.endsWith('.jpeg')) {
+    showWelcomeError('Format non supporté — uniquement .jpg ou .jpeg.');
+    return;
+  }
+
+  const reader = new FileReader();
+
+  reader.onerror = () => {
+    showWelcomeError('Erreur de lecture du fichier.');
+  };
+
+  reader.onload = (e) => {
+    const buffer = new Uint8Array(e.target.result);
+
+    // Validation de la signature JPG : doit commencer par FF D8 (SOI)
+    if (buffer.length < 2 || buffer[0] !== 0xFF || buffer[1] !== 0xD8) {
+      showWelcomeError(
+        'Ce fichier n\'est pas un JPG valide ' +
+        '(signature FFD8 absente en début de fichier).'
+      );
+      return;
+    }
+
+    // Population de l'état global
+    state.buffer         = buffer;
+    state.originalBuffer = new Uint8Array(buffer); // copie immuable
+    state.filename       = file.name;
+    state.fileSize       = buffer.length;
+    state.parsed         = null;
+
+    // Bascule de l'écran d'accueil vers l'app
+    welcomeScreen.classList.add('hidden');
+    appEl.classList.remove('hidden');
+    statusBar.classList.remove('hidden');
+    clearWelcomeError();
+
+    onFileLoaded();
+  };
+
+  reader.readAsArrayBuffer(file);
+}
+
+function showWelcomeError(msg) {
+  welcomeError.textContent = msg;
+}
+function clearWelcomeError() {
+  welcomeError.textContent = '';
+}
+
+// ============================================================
+// Bindings d'événements
+// ============================================================
+
+// Bouton « Ouvrir »
+openBtn.addEventListener('click', () => fileInput.click());
+
+// Sélection via input file
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) loadFile(file);
+  // Reset pour pouvoir recharger le même fichier deux fois de suite
+  fileInput.value = '';
+});
+
+// Drag-and-drop sur la zone de drop ET sur toute la fenêtre
+function handleDragEnter(e) {
+  e.preventDefault();
+  dropZone.classList.add('dragover');
+}
+function handleDragLeave(e) {
+  e.preventDefault();
+  // Ne retire la classe que si on quitte vraiment le viewport
+  if (e.relatedTarget === null) {
+    dropZone.classList.remove('dragover');
+  }
+}
+function handleDragOver(e) {
+  e.preventDefault(); // nécessaire pour autoriser le drop
+}
+function handleDrop(e) {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) loadFile(file);
+}
+
+// On écoute sur window pour permettre le drop n'importe où
+window.addEventListener('dragenter', handleDragEnter);
+window.addEventListener('dragleave', handleDragLeave);
+window.addEventListener('dragover',  handleDragOver);
+window.addEventListener('drop',      handleDrop);
+
+// Empêche aussi le drop accidentel d'ouvrir le fichier dans l'onglet
+dropZone.addEventListener('click', () => fileInput.click());
+
+// ============================================================
+// Phase 5 — Initialisation
+// ============================================================
+setupPhase5Bindings();
+setupPhase3Bindings();
+applyPrefsToUI();
+refreshHistoryUI();
+refreshUndoRedoButtons();
+
+// Phase 3 : resync l'overlay si l'image est redimensionnée (resize fenêtre)
+window.addEventListener('resize', () => {
+  if (imageCanvas && imageCanvas.classList.contains('visible')) syncOverlay();
+});
+</script>
+</body>
+</html>
