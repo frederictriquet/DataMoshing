@@ -603,6 +603,31 @@ button.primary:hover {
 }
 #selection-info strong { color: var(--text); }
 
+/* Toggle cible : plage entière / octet unique */
+.scope-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.scope-btn {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 10px;
+  font-family: inherit;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.scope-btn.active {
+  background: var(--accent);
+  color: #1a1a1a;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
 /* Actions flottantes à droite de la barre d'onglets */
 .panel-tabs-actions {
   margin-left: auto;
@@ -1094,6 +1119,11 @@ button.primary:hover {
     <div id="tab-tools" class="tab-content active">
       <div id="critical-warning" class="critical-warning hidden"></div>
       <div id="selection-info">Aucune sélection.</div>
+      <div class="scope-toggle-row">
+        <span style="font-size:10px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text2);">Cible</span>
+        <button class="scope-btn active" id="scope-range-btn">Plage entière</button>
+        <button class="scope-btn" id="scope-single-btn">Octet unique</button>
+      </div>
       <div id="tools-panel">
 
         <!-- Barre de progression du décodage Huffman (Mode C) — cf. §6.5 -->
@@ -2556,6 +2586,8 @@ let overlayLocked = false;
 let lockedMcu = -1;
 // Offset exact de l'octet sur lequel l'utilisateur a cliqué dans le hex viewer (-1 = aucun).
 let clickCursorOffset = -1;
+// Mode de ciblage des outils : 'range' = plage entière, 'single' = octet unique (clickCursorOffset).
+let singleByteMode = false;
 
 // Synchronise les dimensions du canvas overlay avec #image-canvas
 // (à appeler après chaque renderImage onload).
@@ -2884,15 +2916,23 @@ function normalizeSelection(ranges) {
   return out;
 }
 
+// Retourne la sélection effective selon le mode : octet unique ou plage entière.
+function getEffectiveSelection() {
+  if (singleByteMode && clickCursorOffset >= 0) {
+    return [{ start: clickCursorOffset, end: clickCursorOffset + 1 }];
+  }
+  return edit.selection;
+}
+
 function* iterSelection() {
-  for (const r of edit.selection) {
+  for (const r of getEffectiveSelection()) {
     for (let i = r.start; i < r.end; i++) yield i;
   }
 }
 
 function selectionLength() {
   let n = 0;
-  for (const r of edit.selection) n += (r.end - r.start);
+  for (const r of getEffectiveSelection()) n += (r.end - r.start);
   return n;
 }
 
@@ -3320,6 +3360,10 @@ function updateMappingNote() {
 // ----- Outils rapides (§4.5) ----------------------------------------------
 
 function applyToSelection(fn, opName, params) {
+  if (singleByteMode && clickCursorOffset < 0) {
+    showWarning('Mode octet unique — cliquez sur un octet dans la vue hex.');
+    return;
+  }
   if (selectionLength() === 0) {
     showWarning('Aucune sélection — sélectionnez d\'abord une plage d\'octets.');
     return;
@@ -3356,10 +3400,11 @@ function toolSub() {
 
 // Shift : décale chaque range de N positions ; vides remplis par 0x00.
 function toolShift() {
-  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  const sel = getEffectiveSelection();
+  if (sel.length === 0) { showWarning('Aucune sélection.'); return; }
   const n = parseInt($('tool-shift-n').value, 10) || 0;
   const writes = [];
-  for (const r of edit.selection) {
+  for (const r of sel) {
     const len = r.end - r.start;
     const snap = state.buffer.slice(r.start, r.end);
     for (let i = 0; i < len; i++) {
@@ -3372,9 +3417,10 @@ function toolShift() {
 }
 
 function toolReverse() {
-  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  const sel = getEffectiveSelection();
+  if (sel.length === 0) { showWarning('Aucune sélection.'); return; }
   const writes = [];
-  for (const r of edit.selection) {
+  for (const r of sel) {
     const len = r.end - r.start;
     const snap = state.buffer.slice(r.start, r.end);
     for (let i = 0; i < len; i++) {
@@ -3386,9 +3432,10 @@ function toolReverse() {
 }
 
 function toolRepeat() {
-  if (edit.selection.length === 0) { showWarning('Aucune sélection.'); return; }
+  const sel = getEffectiveSelection();
+  if (sel.length === 0) { showWarning('Aucune sélection.'); return; }
   const writes = [];
-  for (const r of edit.selection) {
+  for (const r of sel) {
     const first = state.buffer[r.start];
     for (let i = r.start + 1; i < r.end; i++) writes.push({ offset: i, value: first });
   }
@@ -4416,6 +4463,18 @@ setupPhase3Bindings();
 applyPrefsToUI();
 refreshHistoryUI();
 refreshUndoRedoButtons();
+
+// Toggle cible : plage entière / octet unique
+document.getElementById('scope-range-btn').addEventListener('click', () => {
+  singleByteMode = false;
+  document.getElementById('scope-range-btn').classList.add('active');
+  document.getElementById('scope-single-btn').classList.remove('active');
+});
+document.getElementById('scope-single-btn').addEventListener('click', () => {
+  singleByteMode = true;
+  document.getElementById('scope-single-btn').classList.add('active');
+  document.getElementById('scope-range-btn').classList.remove('active');
+});
 
 // Phase 3 : resync l'overlay si l'image est redimensionnée (resize fenêtre)
 window.addEventListener('resize', () => {
