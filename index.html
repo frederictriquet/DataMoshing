@@ -594,6 +594,13 @@ button.primary:hover {
   color: #1a1a1a;
   border-color: var(--color-sel);
 }
+.tool-sep {
+  width: 1px;
+  min-width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 4px;
+}
 
 #selection-info {
   font-family: var(--font-mono);
@@ -1136,43 +1143,48 @@ button.primary:hover {
         <!-- Outils opérant sur la sélection courante — cf. §4.5 -->
         <div class="tools-row">
           <span class="tools-label">Aléatoire</span>
-          <button class="tool" data-tool="randomize">Randomize</button>
+          <button class="tool" data-tool="randomize" data-tooltip="Remplace chaque octet par une valeur aléatoire (0–255)">Randomize</button>
+          <span class="tool-sep"></span>
           <span style="color: var(--text2);">Bits :</span>
           <input type="number" id="tool-bitflip-n" value="8" min="1" max="1024" style="width:60px">
-          <button class="tool" data-tool="bitflip">Bit flip</button>
+          <button class="tool" data-tool="bitflip" data-tooltip="Inverse N bits choisis aléatoirement dans la sélection">Bit flip</button>
         </div>
 
         <div class="tools-row">
           <span class="tools-label">Arithmétique</span>
           <span style="color: var(--text2);">Hex :</span>
           <input type="text" id="tool-xor-val" value="FF" maxlength="2" style="width:48px">
-          <button class="tool" data-tool="xor">XOR</button>
+          <button class="tool" data-tool="xor" data-tooltip="XOR chaque octet avec la valeur hex">XOR</button>
+          <span class="tool-sep"></span>
           <span style="color: var(--text2);">N :</span>
           <input type="number" id="tool-addsub-val" value="1" min="-255" max="255" style="width:60px">
-          <button class="tool" data-tool="add">Add</button>
-          <button class="tool" data-tool="sub">Sub</button>
+          <button class="tool" data-tool="add" data-tooltip="Ajoute N à chaque octet (modulo 256)">Add</button>
+          <button class="tool" data-tool="sub" data-tooltip="Soustrait N à chaque octet (modulo 256)">Sub</button>
         </div>
 
         <div class="tools-row">
           <span class="tools-label">Transformation</span>
           <span style="color: var(--text2);">Shift :</span>
           <input type="number" id="tool-shift-n" value="1" style="width:60px">
-          <button class="tool" data-tool="shift">Shift</button>
-          <button class="tool" data-tool="reverse">Reverse</button>
-          <button class="tool" data-tool="repeat">Repeat</button>
+          <button class="tool" data-tool="shift" data-tooltip="Décale les octets de N positions (les extrémités deviennent 0x00)">Shift</button>
+          <span class="tool-sep"></span>
+          <button class="tool" data-tool="reverse" data-tooltip="Inverse l'ordre des octets dans la plage">Reverse</button>
+          <span class="tool-sep"></span>
+          <button class="tool" data-tool="repeat" data-tooltip="Propage le premier octet sur toute la plage">Repeat</button>
         </div>
 
         <div class="tools-row">
           <span class="tools-label">RST</span>
           <span style="color: var(--text2);">Index :</span>
           <input type="number" id="tool-rst-idx" value="0" min="0" max="7" style="width:48px">
-          <button class="tool" data-tool="inject-rst">Inject RST</button>
-          <button class="tool" data-tool="delete-rst">Delete RST</button>
+          <button class="tool" data-tool="inject-rst" data-tooltip="Insère le marqueur RST[index] (0xFF D0–D7) à la position du curseur">Inject RST</button>
+          <span class="tool-sep"></span>
+          <button class="tool" data-tool="delete-rst" data-tooltip="Supprime le marqueur RST à l'index indiqué dans le scan">Delete RST</button>
         </div>
 
         <div class="tools-row">
           <span class="tools-label">Blocs</span>
-          <button class="tool" data-tool="swap">Swap blocks</button>
+          <button class="tool" data-tool="swap" data-tooltip="Sélectionner 2 plages puis les échanger — armé sur le 1er clic">Swap blocks</button>
           <span id="swap-status" style="color: var(--text2); font-size: 10px;"></span>
         </div>
 
@@ -1180,8 +1192,9 @@ button.primary:hover {
           <span class="tools-label">Insertion</span>
           <span style="color: var(--text2);">Hex :</span>
           <input type="text" id="tool-insert-val" value="00" maxlength="2" style="width:48px">
-          <button class="tool" data-tool="insert-byte">Insert</button>
-          <button class="tool" data-tool="delete-byte">Delete</button>
+          <button class="tool" data-tool="insert-byte" data-tooltip="Insère l'octet hex avant la position du curseur (décale la suite)">Insert</button>
+          <span class="tool-sep"></span>
+          <button class="tool" data-tool="delete-byte" data-tooltip="Supprime l'octet à la position du curseur (décale la suite)">Delete</button>
         </div>
 
       </div>
