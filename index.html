@@ -635,36 +635,6 @@ button.primary:hover {
   font-weight: 600;
 }
 
-/* Actions flottantes à droite de la barre d'onglets */
-.panel-tabs-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-right: 8px;
-}
-.panel-action-btn {
-  font-family: var(--font-ui);
-  font-size: 12px;
-  padding: 2px 8px;
-  background: var(--surface2);
-  color: var(--text);
-  border: 1px solid var(--border2);
-  border-radius: 3px;
-  cursor: pointer;
-  transition: opacity var(--transition);
-}
-.panel-action-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.panel-action-btn:not(:disabled):hover {
-  background: var(--border2);
-}
-.panel-action-count {
-  font-size: 11px;
-  color: var(--text2);
-}
 
 /* Bandeau « warning critique » au-dessus des outils */
 .critical-warning {
@@ -1110,10 +1080,6 @@ button.primary:hover {
       <button class="tab active" data-tab="tools">Outils</button>
       <button class="tab" data-tab="history">Historique</button>
       <!-- Bouton Undo intégré dans la barre d'onglets — reste visible au scroll -->
-      <div class="panel-tabs-actions">
-        <button id="undo-btn" class="panel-action-btn" title="Annuler (Ctrl+Z)" disabled>↩ Undo</button>
-        <span id="undo-count" class="panel-action-count"></span>
-      </div>
     </div>
     <div id="tab-structure" class="tab-content">
       <div id="sof2-warning" class="sof2-warning hidden">
@@ -3830,19 +3796,6 @@ function refreshUndoRedoButtons() {
   const r = $('btn-redo');
   if (u) u.disabled = state.undoStack.length === 0;
   if (r) r.disabled = state.redoStack.length === 0;
-  // Met à jour le bouton Undo sticky du panneau Outils
-  updateUndoCount();
-}
-
-// Met à jour le compteur d'actions annulables et l'état disabled du bouton Undo sticky.
-function updateUndoCount() {
-  const el = $('undo-count');
-  const btn = $('undo-btn');
-  const n = state.undoStack ? state.undoStack.length : 0;
-  // Affiche le nombre d'actions si > 0, sinon vide
-  if (el) el.textContent = n > 0 ? `${n} action${n > 1 ? 's' : ''}` : '';
-  // Désactive le bouton quand la pile est vide
-  if (btn) btn.disabled = n === 0;
 }
 
 // ============================================================
@@ -4176,9 +4129,6 @@ function setupPhase5Bindings() {
   // Undo / Redo (boutons barre de statut)
   $('btn-undo').addEventListener('click', undo);
   $('btn-redo').addEventListener('click', redo);
-  // Bouton Undo sticky dans le panneau Outils (même fonction)
-  const undoBtnPanel = $('undo-btn');
-  if (undoBtnPanel) undoBtnPanel.addEventListener('click', undo);
 
   // Reset
   $('btn-reset').addEventListener('click', resetToOriginal);
