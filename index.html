@@ -533,7 +533,8 @@ button.primary:hover {
 .hex-ascii { user-select: none; }
 .hex-ascii-char {
   display: inline-block;
-  padding: 0 1px;
+  width: 1ch;
+  text-align: center;
   border-radius: 2px;
   cursor: text;
 }
@@ -3015,6 +3016,9 @@ renderLine = function (el, lineIndex) {
     const offStr = byteEl.dataset.offset;
     if (offStr == null) continue;
     const off = parseInt(offStr, 10);
+    // Nettoyer toutes les classes d'état avant de les réappliquer — évite les résidus sur les nœuds recyclés
+    byteEl.classList.remove('selected', 'cursor', 'hex-cursor-click');
+    if (asciiEl) asciiEl.classList.remove('selected', 'cursor', 'hex-cursor-click');
     if (isOffsetSelected(off)) {
       byteEl.classList.add('selected');
       if (asciiEl) asciiEl.classList.add('selected');
@@ -3023,7 +3027,6 @@ renderLine = function (el, lineIndex) {
       byteEl.classList.add('cursor');
       if (asciiEl) asciiEl.classList.add('cursor');
     }
-    // Rétablit le marqueur de clic après recyclage du nœud DOM par la virtualisation
     if (off === clickCursorOffset) {
       byteEl.classList.add('hex-cursor-click');
       if (asciiEl) asciiEl.classList.add('hex-cursor-click');
@@ -3184,11 +3187,14 @@ if (hexScroll) {
     setClickCursor(offset);
 
     // Guard : si un MCU est verrouillé et que l'octet cliqué est dans la plage
-    // sélectionnée, on absorbe le mousedown pour ne pas effacer la sélection.
-    // Le handler 'click' prendra le relais et constatera que c'est le même MCU (no-op).
+    // sélectionnée, on déplace le curseur d'édition sans toucher à la sélection.
     if (overlayLocked && edit.selection.length > 0) {
       const locked = edit.selection[0];
-      if (offset >= locked.start && offset < locked.end) return;
+      if (offset >= locked.start && offset < locked.end) {
+        edit.inAsciiMode = target.classList.contains('hex-ascii-char');
+        setCursor(offset); // met à jour edit.cursor + re-rend le DOM (nettoie hex-cursor-click)
+        return;
+      }
     }
 
     // Active le mode ASCII si le clic provient de la colonne ASCII (§4.5)
